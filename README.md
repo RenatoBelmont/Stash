@@ -20,7 +20,10 @@ HTML + CSS + JS puro, sem build. Mesmo padrão visual do Waypoint (claro creme /
 1. **Pelo site** (ex.: Printables → Modelos 3D, MyAnimeList → Animes, Steam → Jogos).
 2. **Pelo conteúdo**: palavras-chave no título e na descrição (um vídeo do YouTube sobre impressão 3D vai para Modelos 3D).
 3. **Aprende com você**: mudou a categoria de um link? Os próximos links daquele site vão para lá. Redes sociais (Instagram, TikTok, YouTube…) não são memorizadas por site, porque cada post é de um assunto.
-4. **Gemini (opcional e grátis)**: entende o assunto do link e **lê imagens e prints**. Crie uma chave em https://aistudio.google.com/apikey e cole em *Configurações*. O Stash escolhe sozinho o melhor modelo Flash disponível. No plano grátis, o Google pode usar o conteúdo enviado para melhorar os produtos dele.
+4. **IA (opcional e grátis)**: entende o assunto do link e **lê imagens e prints**.
+   - **Gemini** (principal): chave em https://aistudio.google.com/apikey. O Stash escolhe sozinho o melhor modelo Flash. No plano grátis, o Google pode usar o conteúdo enviado para melhorar os produtos dele.
+   - **Groq** (reserva): chave em https://console.groq.com/keys. Usado quando o Gemini falha ou atinge o limite grátis (ou como principal, se for a única chave). O Stash escolhe sozinho um modelo de texto e outro que enxerga imagens; se não houver modelo de imagem, usa só o texto. A Groq diz que não usa seus dados para treinar modelos.
+   - Se os dois falharem, valem as regras locais. As chaves ficam só no navegador (não vão para o backup nem para a nuvem).
 
 ## Nuvem (Google Drive, grátis)
 
@@ -52,7 +55,7 @@ Categorias podem acompanhar status (ex.: Séries: *Quero ver → Assistindo → 
 
 - [noembed.com](https://noembed.com) e [microlink.io](https://microlink.io) (grátis, ~50 consultas/dia): título, descrição e imagem dos links.
 - [Lucide](https://lucide.dev) via jsDelivr (versão fixa 0.460.0): ícones.
-- Gemini API (opcional).
+- Gemini API e Groq API (opcionais).
 
 ## Estrutura
 
@@ -64,7 +67,7 @@ css/style.css         visual (padrão Waypoint)
 js/data.js            categorias, status e ícones padrão
 js/storage.js         localStorage, IndexedDB (imagens) e ícones
 js/meta.js            leitura de links (noembed/microlink)
-js/classify.js        regras + Gemini
+js/classify.js        regras + Gemini, com o Groq de reserva
 js/cloud.js           sincronização com o Google Drive
 js/app.js             interface
 assets/               ícone e logo

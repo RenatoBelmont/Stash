@@ -9,7 +9,7 @@
   var imgUrls = {};       // id da imagem → URL local (blob:)
   var imgPending = {};
   var mq = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : { matches: false, addEventListener: function () {} };
-  var aiWarned = 0;
+  var aiWarned = 0, aiMsg = '';
 
   /* ---------- utilidades ---------- */
   function $(s, r) { return (r || document).querySelector(s); }
@@ -29,7 +29,12 @@
   function uniq(a) { return a.filter(function (x, i) { return x && a.indexOf(x) === i; }); }
   function fmtDate(t) { return new Date(t).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', ''); }
   function appUrl() { return /^https?:/.test(location.protocol) ? location.origin + location.pathname : S.PAGES_URL; }
-  function aiOn() { return !!(state.settings.geminiKey && state.settings.aiMode !== 'off'); }
+  function aiOn() { return !!((state.settings.geminiKey || state.settings.groqKey) && state.settings.aiMode !== 'off'); }
+  var AI_NAMES = { gemini: 'Gemini', groq: 'Groq' };
+  function aiLabel() {
+    var g = !!state.settings.geminiKey, q = !!state.settings.groqKey;
+    return g && q ? 'Gemini + Groq' : g ? 'Gemini' : 'Groq';
+  }
   var toastTimer;
   function toast(msg) {
     var t = $('#toast'); t.textContent = msg; t.classList.add('on');
@@ -188,7 +193,7 @@
     else $('#viewTitle').style.setProperty('--c', view.cat === 'fav' ? '#fbbf24' : 'currentColor');
     $('#viewTitle').innerHTML = title;
     $('#addHint').innerHTML = aiOn()
-      ? '<span class="ai-pill on">' + I('sparkles', 12) + 'Gemini ativo</span> classifica pelo conteúdo e lê imagens e prints'
+      ? '<span class="ai-pill on">' + I('sparkles', 12) + esc(aiLabel()) + '</span> classifica pelo conteúdo e lê imagens e prints' + (state.settings.geminiKey && state.settings.groqKey ? ' · o Groq entra se o Gemini falhar' : '')
       : '<span class="ai-pill">' + I('sparkles', 12) + 'Só regras</span> organiza pelo site e por palavras-chave · <a class="inline" href="#" data-open-settings>ativar o Gemini grátis</a>';
     applyTheme();
   }
@@ -255,7 +260,7 @@
       (status || stars ? '<div class="card-row">' + status + stars + '</div>' : '') +
       (tags ? '<div class="card-row tags-row">' + tags + '</div>' : '') +
       '<div class="card-meta">' + logo + '<span>' + esc(i.kind === 'link' ? i.publisher : 'Imagem') + ' · ' + fmtDate(i.created) + '</span>' +
-      (i.ai ? '<span title="Classificado pelo Gemini" style="margin-left:auto;display:inline-flex">' + I('sparkles', 11) + '</span>' : '') + '</div>' +
+      (i.ai ? '<span title="Classificado pelo ' + esc(AI_NAMES[i.aiProvider] || 'Gemini') + '" style="margin-left:auto;display:inline-flex">' + I('sparkles', 11) + '</span>' : '') + '</div>' +
       '</div></article>';
   }
 
@@ -312,8 +317,9 @@
     for (var k = created.length - 1; k >= 0; k--) state.items.unshift(created[k]);
     if (view.cat !== 'all') { view.cat = 'all'; view.status = 'all'; }
     save(); render();
-    aiWarned = 0;
+    aiWarned = 0; aiMsg = '';
     await pool(created, 3, function (it) { return processItem(it, { isNew: true }); });
+    if (aiMsg) { toast(aiMsg); aiMsg = ''; return; } // o aviso da IA vale mais que o "guardado"
     toast(created.length === 1 ? 'Guardado em ' + catById(created[0].category).name : created.length + ' itens guardados e organizados');
   }
 
@@ -338,7 +344,7 @@
       var r = C.rules(state, item);
       item.category = r.category;
       item.tags = r.tags;
-      item.ai = false;
+      item.ai = false; item.aiProvider = '';
       var useAI = aiOn() && (state.settings.aiMode === 'always' || opt.forceAI || r.confidence < 6 || item.kind === 'imagem' || !!item.printId);
       if (useAI) {
         try {
@@ -349,6 +355,7 @@
           if (out.title && (item.titleFromUrl || item.kind === 'imagem') && !item.userTitle) { item.title = out.title; item.titleFromUrl = false; }
           if (out.summary && !item.description) item.description = out.summary;
           item.ai = true;
+          item.aiProvider = out.provider || 'gemini';
           save();
         } catch (e) { aiError(e); }
       }
@@ -362,11 +369,15 @@
   }
 
   function aiError(e) {
-    console.warn('[Stash] Gemini:', e);
+    console.warn('[Stash] IA:', e);
     if (aiWarned++) return;
-    if (e.status === 429) toast('Limite grátis do Gemini atingido por agora. Usei as regras locais.');
-    else if (e.status === 400 || e.status === 401 || e.status === 403) toast('O Gemini recusou a chave. Confira em Configurações.');
-    else toast('Gemini indisponível agora. Usei as regras locais.');
+    var errs = e.all || [e];
+    var show = function (m) { aiMsg = m; toast(m); };
+    var who = state.settings.geminiKey && state.settings.groqKey ? 'O Gemini e o Groq' : state.settings.groqKey ? 'O Groq' : 'O Gemini';
+    var plural = state.settings.geminiKey && state.settings.groqKey;
+    if (errs.every(function (x) { return x.status === 429; })) show(who + (plural ? ' atingiram' : ' atingiu') + ' o limite grátis por agora. Usei as regras locais.');
+    else if (errs.some(function (x) { return x.status === 400 || x.status === 401 || x.status === 403; })) show('Uma chave de IA foi recusada (' + errs.map(function (x) { return x.message.split(':')[0]; }).join(', ') + '). Confira em Configurações.');
+    else show(who + (plural ? ' estão indisponíveis' : ' está indisponível') + ' agora. Usei as regras locais.');
   }
 
   /* ---------- diálogo genérico ---------- */
@@ -467,7 +478,7 @@
       '<label class="field"><span>Tags (separadas por vírgula)</span><input class="input-field" id="fTags" value="' + esc((draft.tags || []).join(', ')) + '"></label>' +
       '<label class="field"><span>Notas</span><textarea class="input-field" id="fNotes" placeholder="Por que guardei isso? Ideias, onde usar…">' + esc(draft.notes) + '</textarea></label>' +
       '<div id="printBox">' + printBlock() + '</div>' +
-      '<p class="note">Guardado em ' + new Date(draft.created).toLocaleString('pt-BR') + (draft.ai ? ' · classificado pelo Gemini' : ' · classificado pelas regras') + '</p>' +
+      '<p class="note">Guardado em ' + new Date(draft.created).toLocaleString('pt-BR') + (draft.ai ? ' · classificado pelo ' + esc(AI_NAMES[draft.aiProvider] || 'Gemini') : ' · classificado pelas regras') + '</p>' +
       '</div>' +
       '<div class="sheet-foot">' +
       '<button type="button" class="btn-primary" id="fSave">' + I('check', 16) + 'Salvar</button>' +
@@ -612,24 +623,38 @@
   function openSettings() {
     var s = state.settings;
     var models = uniq([s.geminiModel].concat(s.geminiModels || []));
+    var gmodels = uniq([s.groqModel].concat(s.groqModels || []));
     var bm = "javascript:(function(){window.open('" + appUrl() + "?url='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title),'_blank')})()";
     openDialog(head('settings', 'Configurações') +
       '<div class="sheet-body">' +
 
-      '<section class="settings-sec"><h4>' + I('sparkles', 16) + 'Inteligência artificial (Gemini, grátis)</h4>' +
-      '<p class="note">Com o Gemini, o Stash entende o assunto do link e lê imagens e prints. Sem ele, organiza pelo site e por palavras-chave. ' +
-      'Crie uma chave grátis em <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> (não pede cartão).</p>' +
-      '<label class="field"><span>Chave da API do Gemini</span><div class="key-row"><input class="input-field" id="sKey" type="password" autocomplete="off" value="' + esc(s.geminiKey) + '" placeholder="AIza…">' +
-      '<button type="button" class="btn-ghost btn-icon" id="sShow" title="Mostrar/ocultar">' + I('eye', 16) + '</button></div></label>' +
-      '<div class="field-row"><label class="field"><span>Modelo</span><div class="key-row"><select class="input-field" id="sModel">' +
+      '<section class="settings-sec"><h4>' + I('sparkles', 16) + 'Inteligência artificial (grátis)</h4>' +
+      '<p class="note">Com IA, o Stash entende o assunto do link e lê imagens e prints. Sem ela, organiza pelo site e por palavras-chave. ' +
+      'O <b>Gemini</b> é o principal; o <b>Groq</b> entra quando o Gemini falha ou atinge o limite grátis. Se os dois falharem, valem as regras.</p>' +
+
+      '<div class="section-title">Gemini · principal</div>' +
+      '<label class="field"><span>Chave da API do Gemini · grátis em <a class="inline" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></span><div class="key-row"><input class="input-field" id="sKey" type="password" autocomplete="off" value="' + esc(s.geminiKey) + '" placeholder="AIza…">' +
+      '<button type="button" class="btn-ghost btn-icon" data-show="sKey" title="Mostrar/ocultar">' + I('eye', 16) + '</button></div></label>' +
+      '<label class="field"><span>Modelo</span><div class="key-row"><select class="input-field" id="sModel">' +
       (models.length ? models.map(function (m) { return '<option' + (m === s.geminiModel ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') : '<option value="">Automático (melhor Flash)</option>') +
       '</select><button type="button" class="btn-ghost btn-icon" id="sList" title="Atualizar lista de modelos">' + I('refresh-cw', 16) + '</button></div></label>' +
-      '<label class="field"><span>Quando usar</span><select class="input-field" id="sMode">' +
+
+      '<div class="section-title">Groq · reserva</div>' +
+      '<label class="field"><span>Chave da API do Groq · grátis em <a class="inline" href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a></span><div class="key-row"><input class="input-field" id="sGroqKey" type="password" autocomplete="off" value="' + esc(s.groqKey || '') + '" placeholder="gsk_…">' +
+      '<button type="button" class="btn-ghost btn-icon" data-show="sGroqKey" title="Mostrar/ocultar">' + I('eye', 16) + '</button></div></label>' +
+      '<label class="field"><span>Modelo de texto</span><div class="key-row"><select class="input-field" id="sGroqModel">' +
+      (gmodels.length ? gmodels.map(function (m) { return '<option' + (m === s.groqModel ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') : '<option value="">Automático</option>') +
+      '</select><button type="button" class="btn-ghost btn-icon" id="sGroqList" title="Atualizar lista de modelos">' + I('refresh-cw', 16) + '</button></div></label>' +
+      '<p class="note" id="sGroqVision">' + (s.groqVisionModel ? 'Prints e imagens: <b>' + esc(s.groqVisionModel) + '</b>' : 'Para prints e imagens o Stash escolhe sozinho um modelo do Groq que enxerga imagens (se houver; senão usa só o texto).') + '</p>' +
+
+      '<label class="field"><span>Quando usar a IA</span><select class="input-field" id="sMode">' +
       '<option value="doubt"' + (s.aiMode === 'doubt' ? ' selected' : '') + '>Quando as regras ficam em dúvida + imagens</option>' +
       '<option value="always"' + (s.aiMode === 'always' ? ' selected' : '') + '>Sempre</option>' +
-      '<option value="off"' + (s.aiMode === 'off' ? ' selected' : '') + '>Desligado</option></select></label></div>' +
-      '<div class="btns"><button type="button" class="btn-primary btn-sm" id="sSaveAi">' + I('check', 14) + 'Salvar</button><button type="button" class="btn-ghost btn-sm" id="sTest">' + I('wand-sparkles', 14) + 'Testar</button></div>' +
-      '<p class="note" id="sTestOut">A chave fica salva só neste navegador. No plano grátis, o Google pode usar o conteúdo enviado (títulos, links e prints) para melhorar os produtos dele.</p>' +
+      '<option value="off"' + (s.aiMode === 'off' ? ' selected' : '') + '>Desligado</option></select></label>' +
+      '<div class="btns"><button type="button" class="btn-primary btn-sm" id="sSaveAi">' + I('check', 14) + 'Salvar</button>' +
+      '<button type="button" class="btn-ghost btn-sm" id="sTest">' + I('wand-sparkles', 14) + 'Testar Gemini</button>' +
+      '<button type="button" class="btn-ghost btn-sm" id="sTestGroq">' + I('wand-sparkles', 14) + 'Testar Groq</button></div>' +
+      '<p class="note" id="sTestOut">As chaves ficam salvas só neste navegador (não vão para o backup nem para a nuvem). No plano grátis, o Google pode usar o conteúdo enviado ao Gemini (títulos, links e prints) para melhorar os produtos dele; a Groq diz que não usa seus dados para treinar modelos.</p>' +
       '</section>' +
 
       '<section class="settings-sec" id="sCloud">' + cloudSettingsHtml() + '</section>' +
@@ -658,14 +683,48 @@
       '</section>' +
       '</div>',
       function (d) {
-        $('#sShow', d).onclick = function () { var k = $('#sKey', d); k.type = k.type === 'password' ? 'text' : 'password'; };
+        $$('[data-show]', d).forEach(function (b) { b.onclick = function () { var k = $('#' + b.dataset.show, d); k.type = k.type === 'password' ? 'text' : 'password'; }; });
         function readAi() {
           var key = $('#sKey', d).value.trim();
           if (key !== s.geminiKey) { s.geminiModel = ''; s.geminiModels = []; }
           s.geminiKey = key;
-          var sel = $('#sModel', d).value; if (sel && key === s.geminiKey && s.geminiModels.length) s.geminiModel = sel;
+          var sel = $('#sModel', d).value; if (sel && s.geminiModels.length) s.geminiModel = sel;
+          var gk = $('#sGroqKey', d).value.trim();
+          if (gk !== (s.groqKey || '')) { s.groqModel = ''; s.groqVisionModel = ''; s.groqModels = []; }
+          s.groqKey = gk;
+          var gsel = $('#sGroqModel', d).value; if (gsel && (s.groqModels || []).length) s.groqModel = gsel;
           s.aiMode = $('#sMode', d).value;
         }
+        function groqOptions() {
+          $('#sGroqModel', d).innerHTML = uniq([s.groqModel].concat(s.groqModels || [])).map(function (m) { return '<option' + (m === s.groqModel ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') || '<option value="">Automático</option>';
+          $('#sGroqVision', d).innerHTML = s.groqVisionModel ? 'Prints e imagens: <b>' + esc(s.groqVisionModel) + '</b>' : 'Nenhum modelo do Groq que enxerga imagens está disponível agora: para prints, o Groq usa só o texto.';
+        }
+        $('#sGroqList', d).onclick = async function () {
+          var key = $('#sGroqKey', d).value.trim();
+          if (!key) { toast('Cole a chave do Groq primeiro'); return; }
+          try {
+            var list = await C.groqListModels(key);
+            s.groqKey = key; s.groqModels = list;
+            var pick = C.groqPick(list);
+            if (!s.groqModel || list.indexOf(s.groqModel) === -1) s.groqModel = pick.text;
+            s.groqVisionModel = pick.vision;
+            save(); groqOptions();
+            toast(list.length + ' modelos encontrados');
+          } catch (e) { toast('Não consegui listar: ' + e.message); }
+        };
+        $('#sTestGroq', d).onclick = async function () {
+          readAi(); save();
+          var out = $('#sTestOut', d);
+          if (!s.groqKey) { out.textContent = 'Cole a chave do Groq primeiro.'; return; }
+          out.innerHTML = I('loader-circle', 13, 'spin') + ' Testando o Groq…';
+          try {
+            var r = await C.test(state, 'groq'); save();
+            out.innerHTML = '✅ Groq funcionou! O modelo <b>' + esc(s.groqModel) + '</b> classificou um link de teste como <b>' + esc(r.category ? catById(r.category).name : '?') + '</b>.';
+            groqOptions(); renderHeader();
+          } catch (e) {
+            out.innerHTML = '❌ Groq: ' + (e.status === 429 ? 'limite grátis atingido por agora. Tente em alguns minutos.' : e.status === 401 || e.status === 403 ? 'chave inválida ou sem permissão.' : esc(e.message));
+          }
+        };
         $('#sList', d).onclick = async function () {
           var key = $('#sKey', d).value.trim();
           if (!key) { toast('Cole a chave primeiro'); return; }
@@ -678,19 +737,19 @@
             toast(list.length + ' modelos encontrados');
           } catch (e) { toast('Não consegui listar: ' + e.message); }
         };
-        $('#sSaveAi', d).onclick = function () { readAi(); save(); renderHeader(); toast(s.geminiKey ? 'Gemini configurado' : 'Gemini desligado'); };
+        $('#sSaveAi', d).onclick = function () { readAi(); save(); renderHeader(); toast(aiOn() ? 'IA configurada: ' + aiLabel() : 'IA desligada'); };
         $('#sTest', d).onclick = async function () {
           readAi(); save();
           var out = $('#sTestOut', d);
-          if (!s.geminiKey) { out.textContent = 'Cole a chave primeiro.'; return; }
-          out.innerHTML = I('loader-circle', 13, 'spin') + ' Testando…';
+          if (!s.geminiKey) { out.textContent = 'Cole a chave do Gemini primeiro.'; return; }
+          out.innerHTML = I('loader-circle', 13, 'spin') + ' Testando o Gemini…';
           try {
-            var r = await C.test(state); save();
-            out.innerHTML = '✅ Funcionou! O modelo <b>' + esc(s.geminiModel) + '</b> classificou um link de teste como <b>' + esc(r.category ? catById(r.category).name : '?') + '</b>.';
+            var r = await C.test(state, 'gemini'); save();
+            out.innerHTML = '✅ Gemini funcionou! O modelo <b>' + esc(s.geminiModel) + '</b> classificou um link de teste como <b>' + esc(r.category ? catById(r.category).name : '?') + '</b>.';
             if ($('#sModel', d).value !== s.geminiModel) $('#sModel', d).innerHTML = uniq([s.geminiModel].concat(s.geminiModels)).map(function (m) { return '<option' + (m === s.geminiModel ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('');
             renderHeader();
           } catch (e) {
-            out.innerHTML = '❌ ' + (e.status === 429 ? 'Limite grátis atingido por agora. Tente em alguns minutos.' : e.status === 400 || e.status === 403 ? 'Chave inválida ou sem permissão.' : 'Erro: ' + esc(e.message));
+            out.innerHTML = '❌ Gemini: ' + (e.status === 429 ? 'Limite grátis atingido por agora. Tente em alguns minutos.' : e.status === 400 || e.status === 403 ? 'Chave inválida ou sem permissão.' : 'Erro: ' + esc(e.message));
           }
         };
         $$('[data-theme]', d).forEach(function (b) {
@@ -725,7 +784,7 @@
     var ids = uniq([].concat.apply([], state.items.map(function (i) { return [i.imageId, i.printId]; })));
     for (var k = 0; k < ids.length; k++) { var b = await getBlob(ids[k]); if (b) images[ids[k]] = await blobToDataUrl(b); }
     var data = { app: 'stash', version: 1, exported: new Date().toISOString(), state: JSON.parse(JSON.stringify(state, function (k2, v) { return k2 === 'loading' ? undefined : v; })), images: images };
-    data.state.settings = Object.assign({}, data.state.settings, { geminiKey: '' }); // a chave não vai no arquivo
+    data.state.settings = Object.assign({}, data.state.settings, { geminiKey: '', groqKey: '' }); // as chaves não vão no arquivo
     var a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
     a.download = 'stash-backup-' + new Date().toISOString().slice(0, 10) + '.json';

@@ -18,7 +18,7 @@ Stash.store = (function () {
       deleted: {},          // id do item → quando foi excluído (para não voltar de outro aparelho)
       cloudImages: {},      // id da imagem → id do arquivo no Google Drive
       catsUpdated: 0, learnedUpdated: 0, lastSync: 0,
-      settings: { theme: 'system', aiMode: 'doubt', geminiKey: '', geminiModel: '', geminiModels: [], driveClientId: '', driveConnected: false }
+      settings: { theme: 'system', aiMode: 'doubt', geminiKey: '', geminiModel: '', geminiModels: [], groqKey: '', groqModel: '', groqVisionModel: '', groqModels: [], driveClientId: '', driveConnected: false }
     };
   }
 

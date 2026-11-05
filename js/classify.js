@@ -133,15 +133,12 @@ Stash.classify = (function () {
     });
   }
 
-  async function gemini(state, item, imageBlob, retried) {
-    var s = state.settings;
-    var model = await ensureModel(state);
+  function buildPrompt(state, item, hasImage) {
     var cats = state.categories.map(function (c) { return '- ' + c.id + ': ' + c.name; }).join('\n');
-    var prompt =
-      'Você organiza uma coleção pessoal de links e imagens salvos da internet.\n' +
+    return 'Você organiza uma coleção pessoal de links e imagens salvos da internet.\n' +
       'Escolha UMA categoria para o item abaixo (use o id exato) e sugira até 5 tags curtas em português, em minúsculas.\n' +
       'Se o item for um vídeo ou post de rede social, classifique pelo ASSUNTO (ex.: vídeo sobre impressão 3D → categoria de modelos 3D).\n' +
-      (imageBlob ? 'Há uma imagem/print anexado: leia o que aparece nela (textos, títulos, logos) para entender o assunto.\n' : '') +
+      (hasImage ? 'Há uma imagem/print anexado: leia o que aparece nela (textos, títulos, logos) para entender o assunto.\n' : '') +
       '\nCategorias:\n' + cats + '\n\n' +
       'Item:\n' +
       (item.url ? 'URL: ' + item.url + '\n' : '') +
@@ -151,8 +148,23 @@ Stash.classify = (function () {
       (item.author ? 'Autor: ' + item.author + '\n' : '') +
       (item.notes ? 'Nota do usuário: ' + item.notes + '\n' : '') +
       '\nResponda só com JSON: {"category":"<id>","title":"<título curto e claro em português, se o atual for ruim ou ausente>","summary":"<resumo de 1 frase>","tags":["..."]}';
+  }
+  function parseOut(state, txt) {
+    var out = JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1));
+    if (!state.categories.some(function (c) { return c.id === out.category; })) out.category = null;
+    out.tags = (out.tags || []).map(function (t) { return String(t).toLowerCase().replace(/^#/, '').trim(); }).filter(Boolean).slice(0, 5);
+    return out;
+  }
+  function httpError(r, j, prefix) {
+    var e = new Error(prefix + ': ' + ((j && j.error && (j.error.message || j.error)) || ('HTTP ' + r.status)));
+    e.status = r.status;
+    return e;
+  }
 
-    var parts = [{ text: prompt }];
+  async function gemini(state, item, imageBlob, retried) {
+    var s = state.settings;
+    var model = await ensureModel(state);
+    var parts = [{ text: buildPrompt(state, item, !!imageBlob) }];
     if (imageBlob) parts.push({ inline_data: { mime_type: imageBlob.type || 'image/jpeg', data: await blobToBase64(imageBlob) } });
 
     var r = await fetch(API + 'models/' + encodeURIComponent(model) + ':generateContent', {
@@ -164,26 +176,98 @@ Stash.classify = (function () {
     if (!r.ok) {
       // modelo descontinuado/renomeado: atualiza a lista e tenta de novo uma vez
       if (r.status === 404 && !retried) { s.geminiModel = ''; return gemini(state, item, imageBlob, true); }
-      var err = new Error((j.error && j.error.message) || ('HTTP ' + r.status));
-      err.status = r.status;
-      throw err;
+      throw httpError(r, j, 'Gemini');
     }
     var txt = ((((j.candidates || [])[0] || {}).content || {}).parts || []).map(function (p) { return p.text || ''; }).join('');
-    var out = JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1));
-    if (!state.categories.some(function (c) { return c.id === out.category; })) out.category = null;
-    out.tags = (out.tags || []).map(function (t) { return String(t).toLowerCase().replace(/^#/, '').trim(); }).filter(Boolean).slice(0, 5);
+    return parseOut(state, txt);
+  }
+
+  /* ---------------- Groq (contingência) ----------------
+     API no formato da OpenAI. Modelos abertos que mudam com frequência: o Stash
+     lista os disponíveis e escolhe sozinho um para texto e outro para imagens. */
+  var GROQ = 'https://api.groq.com/openai/v1/';
+
+  async function groqListModels(key) {
+    var r = await fetch(GROQ + 'models', { headers: { Authorization: 'Bearer ' + key } });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) throw httpError(r, j, 'Groq');
+    return (j.data || []).filter(function (m) { return m.active !== false; }).map(function (m) { return m.id; })
+      .filter(function (id) { return !/(whisper|tts|playai|guard|embed|orpheus|compound|distil)/i.test(id); });
+  }
+  function groqPick(ids) {
+    function first(res) { for (var k = 0; k < res.length; k++) { var f = ids.filter(function (i) { return res[k].test(i); })[0]; if (f) return f; } return ''; }
+    return {
+      text: first([/gpt-oss-120b/, /llama-3\.3-70b/, /kimi/, /qwen.*32b/, /llama-4-maverick/, /llama-4-scout/, /gpt-oss/, /llama/, /./]) || 'llama-3.3-70b-versatile',
+      vision: first([/llama-4-maverick/, /llama-4-scout/, /vision/, /vl/i])
+    };
+  }
+  async function groqModels(state) {
+    var s = state.settings;
+    if (s.groqModel) return { text: s.groqModel, vision: s.groqVisionModel || '' };
+    try {
+      s.groqModels = await groqListModels(s.groqKey);
+      var p = groqPick(s.groqModels);
+      s.groqModel = p.text; s.groqVisionModel = p.vision;
+    } catch (e) { if (e.status === 401) throw e; s.groqModel = 'llama-3.3-70b-versatile'; s.groqVisionModel = ''; }
+    return { text: s.groqModel, vision: s.groqVisionModel || '' };
+  }
+
+  async function groq(state, item, imageBlob, retried) {
+    var s = state.settings;
+    var m = await groqModels(state);
+    var useImg = !!(imageBlob && m.vision);           // sem modelo de imagem: usa só o texto
+    var model = useImg ? m.vision : m.text;
+    var prompt = buildPrompt(state, item, useImg);
+    var content = useImg
+      ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + (imageBlob.type || 'image/jpeg') + ';base64,' + await blobToBase64(imageBlob) } }]
+      : prompt;
+    var r = await fetch(GROQ + 'chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s.groqKey },
+      body: JSON.stringify({
+        model: model, temperature: 0.2, max_tokens: 400,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: 'Responda sempre só com um objeto JSON válido.' }, { role: 'user', content: content }]
+      })
+    });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) {
+      // modelo saiu do catálogo: escolhe de novo e tenta uma vez
+      if ((r.status === 404 || r.status === 400 && /model/i.test(JSON.stringify(j))) && !retried) {
+        s.groqModel = ''; s.groqVisionModel = '';
+        return groq(state, item, imageBlob, true);
+      }
+      throw httpError(r, j, 'Groq');
+    }
+    var txt = (((j.choices || [])[0] || {}).message || {}).content || '';
+    var out = parseOut(state, txt);
+    out.usedImage = useImg;
     return out;
   }
 
+  /* Ordem: Gemini → Groq. Só cai para o Groq se o Gemini falhar. */
   function ai(state, item, imageBlob) {
-    return serial(function () { return gemini(state, item, imageBlob); });
+    var s = state.settings;
+    return serial(async function () {
+      var errors = [];
+      if (s.geminiKey) {
+        try { var g = await gemini(state, item, imageBlob); g.provider = 'gemini'; return g; }
+        catch (e) { console.warn('[Stash] Gemini falhou, tentando o Groq:', e); errors.push(e); }
+      }
+      if (s.groqKey) {
+        try { var q = await groq(state, item, imageBlob); q.provider = 'groq'; q.fallback = errors.length > 0; return q; }
+        catch (e) { console.warn('[Stash] Groq falhou:', e); errors.push(e); }
+      }
+      var err = errors[errors.length - 1] || new Error('Nenhuma IA configurada');
+      err.all = errors;
+      throw err;
+    });
   }
 
-  async function test(state) {
-    state.settings.geminiModel = state.settings.geminiModel || '';
-    var out = await ai(state, { url: 'https://www.printables.com/model/3161-3d-benchy', title: '3DBenchy - The jolly 3D printing torture-test', description: 'A 3D printing calibration model', publisher: 'Printables' });
-    return out;
+  var SAMPLE = { url: 'https://www.printables.com/model/3161-3d-benchy', title: '3DBenchy - The jolly 3D printing torture-test', description: 'A 3D printing calibration model', publisher: 'Printables' };
+  async function test(state, provider) {
+    return serial(function () { return provider === 'groq' ? groq(state, SAMPLE) : gemini(state, SAMPLE); });
   }
 
-  return { rules: rules, ai: ai, listModels: listModels, pickModel: pickModel, test: test };
+  return { rules: rules, ai: ai, listModels: listModels, pickModel: pickModel, test: test, groqListModels: groqListModels, groqPick: groqPick };
 })();
