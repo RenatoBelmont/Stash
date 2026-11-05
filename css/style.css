@@ -247,6 +247,14 @@ dialog.sheet::backdrop { background: rgb(9 9 11 / .5); backdrop-filter: blur(2px
 .drop-veil { position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; background: rgb(9 9 11 / .45); backdrop-filter: blur(3px); color: #fff; font-size: 1.125rem; font-weight: 600; gap: .75rem; pointer-events: none; }
 .drop-veil.on { display: flex; }
 
+/* Puxar para atualizar (app instalado) */
+.ptr { position: fixed; left: 50%; top: calc(env(safe-area-inset-top) - 2.75rem); z-index: 80; width: 2.5rem; height: 2.5rem; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; transform: translate(-50%, 0);
+  background: rgb(var(--bg-surface)); border: 1px solid rgb(var(--border-default)); color: rgb(var(--text-secondary));
+  box-shadow: 0 8px 24px rgb(24 24 27 / .22); opacity: 0; transition: opacity .15s; pointer-events: none; }
+.ptr.on, .ptr.busy { opacity: 1; }
+.ptr.ready, .ptr.busy { color: #f59e0b; border-color: #f59e0b; }
+
 /* ---------- Celular ---------- */
 @media (max-width: 860px) {
   :root { --header-h: 4rem; }

@@ -9,6 +9,8 @@ HTML + CSS + JS puro, sem build. Mesmo padrão visual do Waypoint (claro creme /
 - **No celular e no PC (recomendado):** https://renatobelmont.github.io/Stash/
   - Android (Chrome): menu ⋮ → *Instalar app*. Depois, em qualquer app, *Compartilhar* → **Stash** (links e imagens).
   - iPhone (Safari): *Compartilhar* → *Adicionar à Tela de Início*. O iOS não deixa apps web aparecerem no menu Compartilhar: copie o link e use o botão **+** → *Colar*.
+  - No app instalado (iPhone e Android) não existe o "puxar para atualizar" do navegador: o Stash tem o seu próprio. Puxe a tela para baixo no topo para sincronizar e buscar versão nova. Versões novas também carregam sozinhas ao reabrir o app.
+  - No iPhone, o app da Tela de Início guarda os dados **separado do Safari**: conecte o Google Drive dentro do app também. Lá o login vai para a página do Google e volta (a janela de login não funciona no modo app do iOS).
 - **Local:** abra `index.html` direto no navegador (funciona sem servidor; só o "Compartilhar" do celular e o modo offline precisam do GitHub Pages).
 
 > Os dados ficam salvos **no navegador e no endereço** onde o Stash foi aberto. O Stash do GitHub Pages e o do arquivo local guardam coisas separadas. Use *Configurações → Exportar/Importar backup* para levar de um para o outro e para não perder nada.
@@ -27,7 +29,7 @@ Sincroniza itens, categorias, correções e imagens entre aparelhos. Os dados fi
 Configuração única no [Google Cloud Console](https://console.cloud.google.com/) (grátis):
 1. Novo projeto → *APIs e serviços → Biblioteca* → ativar **Google Drive API**.
 2. *Tela de consentimento OAuth*: Externo, modo Teste, adicionar o seu e-mail como usuário de teste.
-3. *Credenciais → ID do cliente OAuth → Aplicativo da Web*, origem autorizada `https://renatobelmont.github.io`.
+3. *Credenciais → ID do cliente OAuth → Aplicativo da Web*, origem autorizada `https://renatobelmont.github.io` e URI de redirecionamento autorizado `https://renatobelmont.github.io/Stash/` (usado pelo app da Tela de Início do iPhone).
 4. Colar o ID do cliente em *Configurações → Nuvem* (ou em `Stash.DRIVE_CLIENT_ID`, em `js/data.js`) e clicar em **Conectar Google Drive**.
 
 Como funciona: ao abrir e alguns segundos depois de cada mudança, o Stash baixa o `stash.json` da nuvem, junta com o do aparelho (em cada item vale a edição mais recente; itens excluídos ficam registrados para não voltarem) e envia de volta. Cada imagem vira um arquivo, enviado uma vez. O login do Google dura cerca de 1 hora: quando expira, o ícone de nuvem no topo fica laranja; toque nele para entrar de novo. A chave do Gemini não vai para a nuvem.

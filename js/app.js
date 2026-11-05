@@ -146,6 +146,7 @@
       '<input type="file" id="importInput" accept=".json,application/json" hidden>' +
       '<dialog class="sheet" id="dlg"></dialog>' +
       '<div class="toast" id="toast" role="status"></div>' +
+      '<div class="ptr" id="ptr" aria-hidden="true">' + I('refresh-cw', 18) + '</div>' +
       '<div class="drop-veil" id="dropVeil">' + I('download', 28) + 'Solte para guardar no Stash</div>';
   }
 
@@ -928,7 +929,7 @@
       var id = $('#sClient', d).value.trim();
       if (!/\.apps\.googleusercontent\.com$/.test(id)) { toast('Cole o ID do cliente (termina em .apps.googleusercontent.com)'); return; }
       state.settings.driveClientId = id; save();
-      S.cloud.signIn().then(function () {
+      S.cloud.signIn(true).then(function () {
         state.settings.driveConnected = true; save();
         rerender();
         return S.cloud.sync();
@@ -942,10 +943,71 @@
     };
   }
 
+  /* ---------- versão nova do app ---------- */
+  var swReg = null, reloading = false;
   function registerSW() {
-    if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) {
-      navigator.serviceWorker.register('sw.js').catch(function (e) { console.warn('[Stash] SW', e); });
-    }
+    if (!('serviceWorker' in navigator) || !/^https?:/.test(location.protocol)) return;
+    var hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js').then(function (r) { swReg = r; }).catch(function (e) { console.warn('[Stash] SW', e); });
+    // quando uma versão nova assume, recarrega (sem atrapalhar quem está editando)
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (!hadController) { hadController = true; return; }
+      if (reloading) return;
+      if ($('#dlg').open) { toast('Versão nova do Stash: puxe a tela para baixo para atualizar.'); return; }
+      reloading = true; location.reload();
+    });
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible' && swReg) swReg.update().catch(function () {});
+    });
+  }
+  function checkUpdate() {
+    if (!swReg) return Promise.resolve(false);
+    return swReg.update().then(function () {
+      var w = swReg.installing || swReg.waiting;
+      if (!w) return false;
+      return new Promise(function (resolve) {
+        var done = false;
+        navigator.serviceWorker.addEventListener('controllerchange', function () { if (!done) { done = true; resolve(true); } });
+        setTimeout(function () { if (!done) { done = true; resolve(false); } }, 6000);
+      });
+    }).catch(function () { return false; });
+  }
+
+  /* ---------- puxar para atualizar (no app instalado, que não tem isso nativo) ---------- */
+  function isStandalone() { return window.navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches); }
+  async function refreshAll() {
+    var ptr = $('#ptr');
+    ptr.classList.add('busy'); ptr.innerHTML = I('loader-circle', 18, 'spin');
+    var updated = await checkUpdate();
+    if (updated) { reloading = true; location.reload(); return; }
+    if (S.cloud.enabled() && S.cloud.hasToken()) await S.cloud.sync();
+    else if (S.cloud.enabled()) toast('Toque na nuvem (laranja) para entrar no Google e sincronizar.');
+    render();
+    ptr.classList.remove('busy', 'on'); ptr.style.transform = '';
+    if (S.cloud.status() === 'ok') toast('Atualizado');
+  }
+  function bindPullToRefresh() {
+    if (!isStandalone()) return;
+    var ptr = $('#ptr'), startY = null, dist = 0, LIMIT = 70;
+    document.addEventListener('touchstart', function (e) {
+      if (ptr.classList.contains('busy') || $('#dlg').open || window.scrollY > 0 || e.touches.length !== 1) { startY = null; return; }
+      startY = e.touches[0].clientY; dist = 0;
+    }, { passive: true });
+    document.addEventListener('touchmove', function (e) {
+      if (startY == null) return;
+      dist = e.touches[0].clientY - startY;
+      if (dist <= 0 || window.scrollY > 0) { ptr.classList.remove('on'); ptr.style.transform = ''; return; }
+      var y = Math.min(dist * 0.5, LIMIT + 20);
+      ptr.classList.add('on');
+      ptr.style.transform = 'translate(-50%, ' + y + 'px) rotate(' + (y * 4) + 'deg)';
+      ptr.classList.toggle('ready', dist * 0.5 >= LIMIT);
+    }, { passive: true });
+    document.addEventListener('touchend', function () {
+      if (startY == null) return;
+      startY = null;
+      if (dist * 0.5 >= LIMIT) { ptr.style.transform = 'translate(-50%, ' + LIMIT + 'px)'; refreshAll(); }
+      else { ptr.classList.remove('on', 'ready'); ptr.style.transform = ''; }
+    }, { passive: true });
   }
 
   /* ---------- início ---------- */
@@ -953,7 +1015,9 @@
   bind();
   render();
   registerSW();
+  bindPullToRefresh();
   S.cloud.init({
+    toast: toast,
     state: function () { return state; },
     saveLocal: saveLocal,
     onStatus: renderCloud,

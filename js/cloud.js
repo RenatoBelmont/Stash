@@ -42,8 +42,46 @@ Stash.cloud = (function () {
     return gisPromise;
   }
 
+  /* No app da Tela de Início do iPhone/iPad a janela de login não volta para o app.
+     Lá o login é feito indo para a página do Google e voltando (redirecionamento). */
+  function isIosApp() {
+    var standalone = window.navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+    var ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    return standalone && ios;
+  }
+  function redirectUri() { return location.origin + location.pathname.replace(/index\.html$/, ''); }
+  function signInRedirect(connecting) {
+    var st = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    try {
+      localStorage.setItem('stash.oauth.state', st);
+      if (connecting) localStorage.setItem('stash.oauth.connect', '1');
+    } catch (e) {}
+    var q = {
+      client_id: clientId(), redirect_uri: redirectUri(), response_type: 'token',
+      scope: SCOPE, include_granted_scopes: 'true', state: st
+    };
+    location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + Object.keys(q).map(function (k) { return k + '=' + encodeURIComponent(q[k]); }).join('&');
+    return new Promise(function () {}); // a página vai sair daqui
+  }
+  // Volta do login por redirecionamento: o token vem no "#" do endereço
+  function takeRedirect() {
+    if (!/[#&]access_token=/.test(location.hash) && !/[#&]error=/.test(location.hash)) return null;
+    var h = new URLSearchParams(location.hash.slice(1));
+    var expected = null;
+    try { expected = localStorage.getItem('stash.oauth.state'); localStorage.removeItem('stash.oauth.state'); } catch (e) {}
+    var connecting = false;
+    try { connecting = localStorage.getItem('stash.oauth.connect') === '1'; localStorage.removeItem('stash.oauth.connect'); } catch (e) {}
+    if (history.replaceState) history.replaceState(null, '', location.pathname + location.search);
+    if (h.get('error')) return { error: h.get('error') === 'access_denied' ? 'Login cancelado' : 'Login falhou: ' + h.get('error') };
+    if (!expected || h.get('state') !== expected) return { error: 'Login inválido, tente de novo' };
+    token = { access: h.get('access_token'), exp: Date.now() + (Number(h.get('expires_in')) || 3600) * 1000 };
+    try { localStorage.setItem(TK, JSON.stringify(token)); } catch (e) {}
+    return { ok: true, connecting: connecting };
+  }
+
   // Precisa ser chamado direto de um clique (senão o navegador bloqueia a janela de login)
-  function signIn() {
+  function signIn(connecting) {
+    if (clientId() && isIosApp()) return signInRedirect(connecting);
     return new Promise(function (resolve, reject) {
       if (!clientId()) return reject(new Error('Falta o ID do cliente OAuth'));
       if (!(window.google && google.accounts && google.accounts.oauth2)) {
@@ -225,16 +263,28 @@ Stash.cloud = (function () {
   function init(hooks) {
     app = hooks;
     loadToken();
-    if (!enabled() || !available()) { status = 'off'; return; }
-    loadGis().catch(function () {});
-    if (hasToken()) sync(); else setStatus('login');
+    var back = takeRedirect();
+    if (back && back.error) setTimeout(function () { app.toast(back.error); }, 300);
+    if (back && back.ok && back.connecting) {
+      var st = app.state().settings;
+      if (!st.driveClientId) st.driveClientId = clientId();
+      st.driveConnected = true;
+      app.saveLocal();
+      setTimeout(function () { app.toast('Google Drive conectado'); }, 300);
+    }
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'visible' && Date.now() - lastAuto > 30000) { lastAuto = Date.now(); if (hasToken()) sync(); else if (enabled()) setStatus('login'); }
+      if (document.visibilityState !== 'visible' || !enabled()) return;
+      if (Date.now() - lastAuto < 15000) return;
+      lastAuto = Date.now();
+      if (hasToken()) sync(); else setStatus('login');
     });
+    if (!enabled() || !available()) { status = 'off'; return; }
+    if (!isIosApp()) loadGis().catch(function () {});
+    if (hasToken()) sync(); else setStatus('login');
   }
 
   return {
-    init: init, sync: sync, schedule: schedule, signIn: signIn, signOut: signOut, loadGis: loadGis,
+    init: init, sync: sync, isIosApp: isIosApp, schedule: schedule, signIn: signIn, signOut: signOut, loadGis: loadGis,
     fetchImage: fetchImage, deleteImage: deleteImage, merge: merge,
     enabled: enabled, available: available, hasToken: hasToken,
     status: function () { return status; }, error: function () { return lastError; }
