@@ -79,4 +79,4 @@ Stash.PAGES_URL = 'https://renatobelmont.github.io/Stash/';
 
 /* ID do cliente OAuth do Google (Drive). Não é secreto: só funciona em
    https://renatobelmont.github.io. Também pode ser colado em Configurações. */
-Stash.DRIVE_CLIENT_ID = '';
+Stash.DRIVE_CLIENT_ID = '797731559885-7jd1kjhsgofqm1s5l7nphb5j847pmsi2.apps.googleusercontent.com';
