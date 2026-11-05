@@ -69,17 +69,6 @@ img { display: block; }
 ::-webkit-scrollbar-thumb { background: rgb(var(--scroll-thumb)); border-radius: 9999px; border: 2px solid transparent; background-clip: content-box; }
 [hidden] { display: none !important; }
 
-/* Chuva de meteoros sutil (só no escuro, como no Waypoint) */
-.meteor-shower { display: none; }
-.dark .meteor-shower { display: block; position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
-.meteor { position: absolute; top: 0; left: 0; opacity: 0; animation: meteor-fall linear infinite; }
-.meteor-bar { display: block; position: relative; height: 1.5px; border-radius: 999px; transform-origin: right center; transform: rotate(114deg);
-  background: linear-gradient(to left, rgb(var(--text-primary) / .55), rgb(var(--text-primary) / 0)); }
-.meteor-bar::before { content: ''; position: absolute; top: 50%; right: -1px; width: 3px; height: 3px; border-radius: 50%;
-  background: rgb(var(--text-primary) / .8); transform: translateY(-50%); box-shadow: 0 0 4px 1px rgb(var(--text-primary) / .5); }
-@keyframes meteor-fall { 0% { transform: translate(0, 0); opacity: 0; } 8% { opacity: .8; } 70% { opacity: .8; } 100% { transform: translate(var(--tx), var(--ty)); opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .meteor-shower { display: none !important; } }
-
 /* ---------- Componentes base ---------- */
 .card-surface {
   border-radius: var(--radius);

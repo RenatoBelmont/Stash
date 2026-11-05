@@ -90,20 +90,9 @@
     save(); applyTheme();
     toast('Tema: ' + { system: 'Sistema', light: 'Claro', dark: 'Escuro' }[state.settings.theme]);
   }
-  function buildMeteors() {
-    var box = $('#meteors'), html = '';
-    for (var i = 0; i < 12; i++) {
-      var len = 70 + Math.random() * 90, dist = 500 + Math.random() * 500, dur = 7 + Math.random() * 9;
-      html += '<span class="meteor" style="left:' + (Math.random() * 110) + '%;top:' + (-10 + Math.random() * 40) + '%;--tx:' + (-dist * 0.42) + 'px;--ty:' + (dist * 0.9) +
-        'px;animation-duration:' + dur + 's;animation-delay:' + (Math.random() * 14) + 's"><span class="meteor-bar" style="width:' + len + 'px"></span></span>';
-    }
-    box.innerHTML = html;
-  }
-
   /* ---------- estrutura da página ---------- */
   function shell() {
     $('#app').innerHTML =
-      '<div class="meteor-shower" id="meteors"></div>' +
       '<header class="app-header">' +
       '  <div class="wrap header-top">' +
       '    <div class="header-brand">' +
@@ -869,7 +858,6 @@
 
   /* ---------- início ---------- */
   shell();
-  buildMeteors();
   bind();
   render();
   registerSW();
