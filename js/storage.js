@@ -15,7 +15,10 @@ Stash.store = (function () {
       items: [],
       categories: JSON.parse(JSON.stringify(Stash.DEFAULT_CATEGORIES)),
       learned: {},
-      settings: { theme: 'system', aiMode: 'doubt', geminiKey: '', geminiModel: '', geminiModels: [] }
+      deleted: {},          // id do item → quando foi excluído (para não voltar de outro aparelho)
+      cloudImages: {},      // id da imagem → id do arquivo no Google Drive
+      catsUpdated: 0, learnedUpdated: 0, lastSync: 0,
+      settings: { theme: 'system', aiMode: 'doubt', geminiKey: '', geminiModel: '', geminiModels: [], driveClientId: '', driveConnected: false }
     };
   }
 
@@ -26,6 +29,8 @@ Stash.store = (function () {
         var f = fresh();
         s.categories = s.categories && s.categories.length ? s.categories : f.categories;
         s.learned = s.learned || {};
+        s.deleted = s.deleted || {};
+        s.cloudImages = s.cloudImages || {};
         s.settings = Object.assign(f.settings, s.settings || {});
         s.items.forEach(function (i) { i.loading = false; });
         return s;

@@ -16,7 +16,14 @@
   function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
-  function save() { if (!S.store.save(state)) toast('Não foi possível salvar (armazenamento cheio?). Exporte um backup.'); }
+  var lastCats = JSON.stringify(state.categories), lastLearned = JSON.stringify(state.learned);
+  function stamp() {
+    var c = JSON.stringify(state.categories), l = JSON.stringify(state.learned);
+    if (c !== lastCats) { state.catsUpdated = Date.now(); lastCats = c; }
+    if (l !== lastLearned) { state.learnedUpdated = Date.now(); lastLearned = l; }
+  }
+  function saveLocal() { if (!S.store.save(state)) toast('Não foi possível salvar (armazenamento cheio?). Exporte um backup.'); }
+  function save() { stamp(); saveLocal(); if (S.cloud) S.cloud.schedule(); }
   function catById(id) { return state.categories.find(function (c) { return c.id === id; }) || state.categories.find(function (c) { return c.id === 'outros'; }) || state.categories[0]; }
   function statusNames(cat) { return (S.STATUS_SETS[cat && cat.status] || S.STATUS_SETS.geral).nomes; }
   function uniq(a) { return a.filter(function (x, i) { return x && a.indexOf(x) === i; }); }
@@ -63,8 +70,11 @@
     if (imgUrls[id]) return imgUrls[id];
     if (!imgPending[id]) {
       imgPending[id] = S.idb.getImage(id).then(function (b) {
+        return b || (S.cloud && S.cloud.fetchImage(id));
+      }).then(function (b) {
         if (b) { imgUrls[id] = URL.createObjectURL(b); renderGrid(); }
-      }).catch(function () {});
+        else delete imgPending[id]; // tenta de novo depois (ex.: quando o login do Drive voltar)
+      }).catch(function () { delete imgPending[id]; });
     }
     return '';
   }
@@ -100,6 +110,7 @@
       '      <div style="min-width:0"><h1 class="header-title">Stash</h1><p class="header-subtitle" id="subtitle"></p></div>' +
       '    </div>' +
       '    <div class="header-actions">' +
+      '      <button type="button" class="btn-ghost btn-icon" id="cloudBtn" hidden></button>' +
       '      <button type="button" class="btn-ghost btn-icon" id="settingsBtn" title="Configurações" aria-label="Configurações">' + I('settings', 16) + '</button>' +
       '      <button type="button" class="btn-ghost btn-icon" id="themeBtn" aria-label="Alternar tema"></button>' +
       '    </div>' +
@@ -509,7 +520,7 @@
         draft.notes = $('#fNotes', d).value;
         if (draft.url && draft.category !== item.category && $('#fLearn', d) && $('#fLearn', d).checked) state.learned[M.host(draft.url)] = draft.category;
         var newPrint = !!draft._newPrint; delete draft._newPrint;
-        if (oldPrint && oldPrint !== draft.printId) S.idb.delImage(oldPrint).catch(function () {});
+        if (oldPrint && oldPrint !== draft.printId) { S.idb.delImage(oldPrint).catch(function () {}); S.cloud.deleteImage(oldPrint); }
         draft.updated = Date.now();
         Object.assign(item, draft);
         save(); render();
@@ -527,8 +538,9 @@
       };
       $('#fDel', d).onclick = function () {
         if (!confirm('Excluir "' + item.title + '"?')) return;
-        [item.imageId, item.printId, draft.printId].forEach(function (x) { if (x) S.idb.delImage(x).catch(function () {}); });
+        [item.imageId, item.printId, draft.printId].forEach(function (x) { if (x) { S.idb.delImage(x).catch(function () {}); S.cloud.deleteImage(x); } });
         state.items = state.items.filter(function (x) { return x.id !== item.id; });
+        state.deleted[item.id] = Date.now();
         save(); render(); closeDialog(); toast('Excluído');
       };
     });
@@ -586,7 +598,7 @@
         };
         if ($('#cDel', d)) $('#cDel', d).onclick = function () {
           if (!confirm('Excluir a categoria "' + c.name + '"? Os itens dela vão para "Outros".')) return;
-          state.items.forEach(function (i) { if (i.category === id) i.category = 'outros'; });
+          state.items.forEach(function (i) { if (i.category === id) { i.category = 'outros'; i.updated = Date.now(); } });
           state.categories = state.categories.filter(function (x) { return x.id !== id; });
           Object.keys(state.learned).forEach(function (k) { if (state.learned[k] === id) delete state.learned[k]; });
           if (view.cat === id) view.cat = 'all';
@@ -618,6 +630,8 @@
       '<div class="btns"><button type="button" class="btn-primary btn-sm" id="sSaveAi">' + I('check', 14) + 'Salvar</button><button type="button" class="btn-ghost btn-sm" id="sTest">' + I('wand-sparkles', 14) + 'Testar</button></div>' +
       '<p class="note" id="sTestOut">A chave fica salva só neste navegador. No plano grátis, o Google pode usar o conteúdo enviado (títulos, links e prints) para melhorar os produtos dele.</p>' +
       '</section>' +
+
+      '<section class="settings-sec" id="sCloud">' + cloudSettingsHtml() + '</section>' +
 
       '<section class="settings-sec"><h4>' + I('sun', 16) + 'Aparência</h4>' +
       '<div class="seg" id="sTheme">' +
@@ -681,12 +695,13 @@
         $$('[data-theme]', d).forEach(function (b) {
           b.onclick = function () { s.theme = b.dataset.theme; save(); applyTheme(); $$('[data-theme]', d).forEach(function (x) { x.classList.toggle('on', x === b); }); };
         });
+        bindCloudSettings(d);
         $('#sExport', d).onclick = exportBackup;
         $('#sImport', d).onclick = function () { $('#importInput').click(); };
         $('#sReclass', d).onclick = function () {
           if (!confirm('Reclassificar todos os itens pelas regras locais? (Categorias escolhidas pelo Gemini ou por você podem mudar.)')) return;
           state.items.forEach(function (i) {
-            var r = C.rules(state, i); i.category = r.category; i.ai = false;
+            var r = C.rules(state, i); i.category = r.category; i.ai = false; i.updated = Date.now();
             var h = i.url ? M.host(i.url) : ''; if (h && !M.isGenericHost(h) && state.learned[h]) i.category = state.learned[h];
           });
           save(); render(); toast('Tudo reclassificado');
@@ -695,7 +710,7 @@
         $('#sResetCats', d).onclick = function () {
           if (!confirm('Restaurar as categorias padrão? Categorias criadas por você serão removidas (os itens delas vão para "Outros").')) return;
           state.categories = JSON.parse(JSON.stringify(S.DEFAULT_CATEGORIES));
-          state.items.forEach(function (i) { if (!state.categories.some(function (c) { return c.id === i.category; })) i.category = 'outros'; });
+          state.items.forEach(function (i) { if (!state.categories.some(function (c) { return c.id === i.category; })) { i.category = 'outros'; i.updated = Date.now(); } });
           view.cat = 'all'; save(); render(); closeDialog();
         };
       });
@@ -790,6 +805,7 @@
     $('#fab').onclick = openAdd;
     $('#themeBtn').onclick = cycleTheme;
     $('#settingsBtn').onclick = openSettings;
+    $('#cloudBtn').onclick = cloudClick;
     $('#importInput').onchange = function () { var f = this.files[0]; this.value = ''; if (f) importBackup(f); };
     $('#search').oninput = function () { view.q = this.value; renderGrid(); };
     $('#sort').onchange = function () { view.sort = this.value; renderGrid(); };
@@ -847,7 +863,83 @@
 
     if (mq.addEventListener) mq.addEventListener('change', function () { if (state.settings.theme === 'system') applyTheme(); });
     // outra aba mudou os dados → recarrega
-    window.addEventListener('storage', function (e) { if (e.key === 'stash.v1') { state = S.store.load(); render(); } });
+    window.addEventListener('storage', function (e) { if (e.key === 'stash.v1') { state = S.store.load(); lastCats = JSON.stringify(state.categories); lastLearned = JSON.stringify(state.learned); render(); } });
+  }
+
+  /* ---------- nuvem (Google Drive) ---------- */
+  function cloudText() {
+    var st = S.cloud.status();
+    if (st === 'syncing') return 'Sincronizando…';
+    if (st === 'login') return 'Toque para entrar de novo no Google e sincronizar';
+    if (st === 'error') return 'Erro ao sincronizar: ' + S.cloud.error();
+    if (state.lastSync) return 'Sincronizado às ' + new Date(state.lastSync).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    return 'Google Drive conectado';
+  }
+  function renderCloud() {
+    var b = $('#cloudBtn'); if (!b) return;
+    var on = S.cloud.enabled() && S.cloud.available();
+    b.hidden = !on;
+    if (on) {
+      var st = S.cloud.status();
+      b.innerHTML = st === 'syncing' ? I('loader-circle', 16, 'spin') : st === 'login' || st === 'error' ? I('cloud-off', 16) : I('cloud', 16);
+      b.style.color = st === 'login' ? '#d97706' : st === 'error' ? '#f43f5e' : '';
+      b.title = cloudText();
+      b.setAttribute('aria-label', cloudText());
+    }
+    var sec = document.querySelector('#sCloud');
+    if (sec) { var t = sec.querySelector('#sCloudStatus'); if (t) t.textContent = cloudText(); }
+  }
+  function cloudClick() {
+    var st = S.cloud.status();
+    if (st === 'login' || !S.cloud.hasToken()) {
+      S.cloud.signIn().then(function () { return S.cloud.sync(); }).then(function () { if (S.cloud.status() === 'ok') toast('Sincronizado com o Google Drive'); })
+        .catch(function (e) { toast(e.message); });
+    } else {
+      S.cloud.sync().then(function () { toast(S.cloud.status() === 'ok' ? 'Sincronizado' : cloudText()); });
+    }
+  }
+  function cloudSettingsHtml() {
+    var s = state.settings, conn = S.cloud.enabled();
+    var html = '<h4>' + I('cloud', 16) + 'Nuvem (Google Drive, grátis)</h4>' +
+      '<p class="note">Sincroniza itens, categorias e imagens entre o celular e o PC. Fica numa pasta oculta do app no seu Drive: o Stash não enxerga seus outros arquivos.</p>';
+    if (!S.cloud.available()) {
+      return html + '<p class="note">A sincronização só funciona no Stash publicado: <a href="' + esc(S.PAGES_URL) + '" target="_blank" rel="noopener">' + esc(S.PAGES_URL.replace('https://', '')) + '</a>. Aberto direto pelo arquivo, o Google não permite o login.</p>';
+    }
+    html += '<label class="field"><span>ID do cliente OAuth</span><input class="input-field" id="sClient" autocomplete="off" value="' + esc(s.driveClientId || S.DRIVE_CLIENT_ID || '') + '" placeholder="…apps.googleusercontent.com"' + (conn ? ' disabled' : '') + '></label>';
+    if (conn) {
+      html += '<p class="note" id="sCloudStatus">' + esc(cloudText()) + '</p>' +
+        '<div class="btns"><button type="button" class="btn-primary btn-sm" id="sSync">' + I('refresh-cw', 14) + 'Sincronizar agora</button>' +
+        '<button type="button" class="btn-ghost btn-sm" id="sDisconnect">' + I('cloud-off', 14) + 'Desconectar</button></div>';
+    } else {
+      html += '<div class="btns"><button type="button" class="btn-primary btn-sm" id="sConnect">' + I('cloud', 14) + 'Conectar Google Drive</button></div>' +
+        '<p class="note">Na primeira vez o Google avisa que o app "não foi verificado" (é um app pessoal): clique em <i>Continuar</i>. Em cada aparelho você conecta uma vez; de tempos em tempos o Google pede para entrar de novo (botão de nuvem no topo).</p>';
+    }
+    return html;
+  }
+  function bindCloudSettings(d) {
+    var sec = $('#sCloud', d); if (!sec) return;
+    function rerender() { sec.innerHTML = cloudSettingsHtml(); bindCloudSettings(d); renderCloud(); }
+    var c = $('#sClient', d);
+    if (c && !c.disabled) {
+      c.onchange = function () { state.settings.driveClientId = c.value.trim(); save(); if (c.value.trim()) S.cloud.loadGis().catch(function () {}); };
+      if (c.value.trim()) S.cloud.loadGis().catch(function () {}); // deixa o login pronto para o clique
+    }
+    if ($('#sConnect', d)) $('#sConnect', d).onclick = function () {
+      var id = $('#sClient', d).value.trim();
+      if (!/\.apps\.googleusercontent\.com$/.test(id)) { toast('Cole o ID do cliente (termina em .apps.googleusercontent.com)'); return; }
+      state.settings.driveClientId = id; save();
+      S.cloud.signIn().then(function () {
+        state.settings.driveConnected = true; save();
+        rerender();
+        return S.cloud.sync();
+      }).then(function () { rerender(); toast(S.cloud.status() === 'ok' ? 'Google Drive conectado e sincronizado' : cloudText()); })
+        .catch(function (e) { toast(e.message); });
+    };
+    if ($('#sSync', d)) $('#sSync', d).onclick = cloudClick;
+    if ($('#sDisconnect', d)) $('#sDisconnect', d).onclick = function () {
+      if (!confirm('Desconectar o Google Drive neste aparelho? Seus itens continuam aqui e na nuvem.')) return;
+      S.cloud.signOut(); state.settings.driveConnected = false; save(); rerender(); toast('Drive desconectado neste aparelho');
+    };
   }
 
   function registerSW() {
@@ -861,6 +953,18 @@
   bind();
   render();
   registerSW();
+  S.cloud.init({
+    state: function () { return state; },
+    saveLocal: saveLocal,
+    onStatus: renderCloud,
+    apply: function (m) {
+      ['items', 'categories', 'catsUpdated', 'learned', 'learnedUpdated', 'deleted', 'cloudImages'].forEach(function (k) { state[k] = m[k]; });
+      lastCats = JSON.stringify(state.categories); lastLearned = JSON.stringify(state.learned);
+      if (view.cat !== 'all' && view.cat !== 'fav' && !state.categories.some(function (c) { return c.id === view.cat; })) view.cat = 'all';
+      saveLocal(); render();
+    }
+  });
+  renderCloud();
   handleIncoming();
   window.StashApp = { state: function () { return state; }, addStuff: addStuff }; // para depuração no console
 })();

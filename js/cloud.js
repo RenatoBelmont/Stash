@@ -1,0 +1,242 @@
+/* =========================================================================
+   STASH — sincronização com o Google Drive
+   - Usa a "pasta do app" (appDataFolder): oculta, o Stash só enxerga ela.
+   - stash.json guarda itens, categorias, correções e exclusões.
+   - Cada imagem/print vira um arquivo "img-<id>", enviado uma vez só.
+   - Junção: em cada item vale a edição mais recente; exclusões ficam
+     registradas para o item não "voltar" de outro aparelho.
+   - Login: Google Identity Services (token de ~1 h, guardado neste navegador).
+   ========================================================================= */
+window.Stash = window.Stash || {};
+
+Stash.cloud = (function () {
+  var SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+  var API = 'https://www.googleapis.com/drive/v3/';
+  var UP = 'https://www.googleapis.com/upload/drive/v3/';
+  var TK = 'stash.drive.token';
+  var app = null, token = null, status = 'off', lastError = '';
+  var timer = null, running = null, again = false, lastAuto = 0;
+
+  /* ---------- token ---------- */
+  function loadToken() {
+    try { var t = JSON.parse(localStorage.getItem(TK)); if (t && t.exp > Date.now() + 60000) token = t; } catch (e) {}
+  }
+  function hasToken() { return !!(token && token.exp > Date.now() + 60000); }
+  function clientId() { return (app.state().settings.driveClientId || Stash.DRIVE_CLIENT_ID || '').trim(); }
+  function enabled() { return !!(app.state().settings.driveConnected && clientId()); }
+  function available() { return /^https?:/.test(location.protocol); }
+  function setStatus(s, err) { status = s; lastError = err || ''; app.onStatus(); }
+
+  var gisPromise = null;
+  function loadGis() {
+    if (window.google && google.accounts && google.accounts.oauth2) return Promise.resolve();
+    if (gisPromise) return gisPromise;
+    gisPromise = new Promise(function (resolve, reject) {
+      var sc = document.createElement('script');
+      sc.src = 'https://accounts.google.com/gsi/client';
+      sc.async = true;
+      sc.onload = function () { resolve(); };
+      sc.onerror = function () { gisPromise = null; reject(new Error('Não consegui carregar o login do Google (sem internet?)')); };
+      document.head.appendChild(sc);
+    });
+    return gisPromise;
+  }
+
+  // Precisa ser chamado direto de um clique (senão o navegador bloqueia a janela de login)
+  function signIn() {
+    return new Promise(function (resolve, reject) {
+      if (!clientId()) return reject(new Error('Falta o ID do cliente OAuth'));
+      if (!(window.google && google.accounts && google.accounts.oauth2)) {
+        return loadGis().then(function () { reject(new Error('Login carregado. Toque de novo para entrar.')); }, reject);
+      }
+      var client = google.accounts.oauth2.initTokenClient({
+        client_id: clientId(),
+        scope: SCOPE,
+        callback: function (r) {
+          if (r.error) return reject(new Error(r.error_description || r.error));
+          token = { access: r.access_token, exp: Date.now() + (Number(r.expires_in) || 3600) * 1000 };
+          try { localStorage.setItem(TK, JSON.stringify(token)); } catch (e) {}
+          resolve();
+        },
+        error_callback: function (e) {
+          reject(new Error(e && e.type === 'popup_closed' ? 'Login cancelado' : e && e.type === 'popup_failed_to_open' ? 'O navegador bloqueou a janela de login' : (e && (e.message || e.type)) || 'Falha no login'));
+        }
+      });
+      client.requestAccessToken({ prompt: '' });
+    });
+  }
+
+  function signOut() {
+    if (token && window.google && google.accounts && google.accounts.oauth2) {
+      try { google.accounts.oauth2.revoke(token.access, function () {}); } catch (e) {}
+    }
+    token = null;
+    try { localStorage.removeItem(TK); } catch (e) {}
+  }
+
+  /* ---------- Drive ---------- */
+  async function api(url, opt) {
+    opt = opt || {};
+    opt.headers = Object.assign({ Authorization: 'Bearer ' + token.access }, opt.headers || {});
+    var r = await fetch(url, opt);
+    if (r.status === 401) {
+      token = null; try { localStorage.removeItem(TK); } catch (e) {}
+      var a = new Error('Login expirou'); a.auth = true; throw a;
+    }
+    if (!r.ok) {
+      var t = ''; try { t = await r.text(); } catch (e) {}
+      var m = t; try { m = JSON.parse(t).error.message; } catch (e) {}
+      throw new Error('Drive ' + r.status + (m ? ': ' + String(m).slice(0, 160) : ''));
+    }
+    return r;
+  }
+  async function findFile(name) {
+    var q = encodeURIComponent("name='" + name + "' and trashed=false");
+    var r = await api(API + 'files?spaces=appDataFolder&q=' + q + '&fields=files(id,modifiedTime)&orderBy=modifiedTime%20desc&pageSize=5');
+    var j = await r.json();
+    return (j.files || [])[0] || null;
+  }
+  async function upload(name, blob, fileId) {
+    if (fileId) {
+      var r = await api(UP + 'files/' + fileId + '?uploadType=media&fields=id', {
+        method: 'PATCH', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob
+      });
+      return (await r.json()).id;
+    }
+    var fd = new FormData();
+    fd.append('metadata', new Blob([JSON.stringify({ name: name, parents: ['appDataFolder'] })], { type: 'application/json' }));
+    fd.append('file', blob);
+    var r2 = await api(UP + 'files?uploadType=multipart&fields=id', { method: 'POST', body: fd });
+    return (await r2.json()).id;
+  }
+
+  /* ---------- junção ---------- */
+  function snapshot(st) {
+    return {
+      app: 'stash', version: 1, savedAt: Date.now(),
+      items: st.items.map(function (i) { var c = Object.assign({}, i); delete c.loading; return c; }),
+      categories: st.categories, catsUpdated: st.catsUpdated || 0,
+      learned: st.learned, learnedUpdated: st.learnedUpdated || 0,
+      deleted: st.deleted || {}, cloudImages: st.cloudImages || {}
+    };
+  }
+
+  function merge(local, remote) {
+    var out = {
+      items: local.items, categories: local.categories, catsUpdated: local.catsUpdated || 0,
+      learned: local.learned, learnedUpdated: local.learnedUpdated || 0,
+      deleted: Object.assign({}, local.deleted || {}), cloudImages: Object.assign({}, local.cloudImages || {})
+    };
+    if (!remote || !Array.isArray(remote.items)) return out;
+
+    Object.keys(remote.deleted || {}).forEach(function (k) { out.deleted[k] = Math.max(out.deleted[k] || 0, remote.deleted[k]); });
+    out.cloudImages = Object.assign({}, remote.cloudImages || {}, out.cloudImages);
+
+    var map = {};
+    remote.items.forEach(function (i) { map[i.id] = i; });
+    local.items.forEach(function (i) {
+      var r = map[i.id];
+      if (!r || i.loading || (i.updated || 0) >= (r.updated || 0)) map[i.id] = i;
+    });
+    var items = Object.keys(map).map(function (k) { return map[k]; })
+      .filter(function (i) { return !(out.deleted[i.id] && out.deleted[i.id] >= (i.updated || 0)); });
+    // o mesmo link guardado em dois aparelhos: fica o mais recente
+    var byUrl = {};
+    items.sort(function (a, b) { return (b.updated || 0) - (a.updated || 0); });
+    items = items.filter(function (i) { if (!i.url) return true; if (byUrl[i.url]) return false; byUrl[i.url] = 1; return true; });
+    items.sort(function (a, b) { return (b.created || 0) - (a.created || 0); });
+    items.forEach(function (i) { i.loading = !!i.loading; });
+    out.items = items;
+
+    if ((remote.catsUpdated || 0) > out.catsUpdated && Array.isArray(remote.categories) && remote.categories.length) {
+      out.categories = remote.categories; out.catsUpdated = remote.catsUpdated;
+    }
+    if ((remote.learnedUpdated || 0) > out.learnedUpdated && remote.learned) {
+      out.learned = remote.learned; out.learnedUpdated = remote.learnedUpdated;
+    }
+    return out;
+  }
+
+  /* ---------- sincronizar ---------- */
+  function sync() {
+    if (!enabled() || !available()) { setStatus('off'); return Promise.resolve(); }
+    if (!hasToken()) { setStatus('login'); return Promise.resolve(); }
+    if (running) { again = true; return running; }
+    clearTimeout(timer);
+    running = (async function () {
+      setStatus('syncing');
+      try {
+        var f = await findFile('stash.json');
+        var remote = null;
+        if (f) { var r = await api(API + 'files/' + f.id + '?alt=media'); remote = await r.json(); }
+        app.apply(merge(app.state(), remote));
+
+        // envia imagens que ainda não estão na nuvem
+        var st = app.state();
+        st.cloudImages = st.cloudImages || {};
+        var ids = [];
+        st.items.forEach(function (i) { [i.imageId, i.printId].forEach(function (x) { if (x && ids.indexOf(x) === -1) ids.push(x); }); });
+        for (var k = 0; k < ids.length; k++) {
+          if (st.cloudImages[ids[k]]) continue;
+          var blob = await Stash.idb.getImage(ids[k]).catch(function () { return null; });
+          if (blob) st.cloudImages[ids[k]] = await upload('img-' + ids[k], blob);
+        }
+
+        await upload('stash.json', new Blob([JSON.stringify(snapshot(st))], { type: 'application/json' }), f && f.id);
+        st.lastSync = Date.now();
+        app.saveLocal();
+        setStatus('ok');
+      } catch (e) {
+        console.warn('[Stash] Drive:', e);
+        setStatus(e.auth ? 'login' : 'error', e.message);
+      }
+      running = null;
+      if (again) { again = false; schedule(1500); }
+    })();
+    return running;
+  }
+
+  function schedule(ms) {
+    if (!enabled() || !hasToken() || !available()) return;
+    clearTimeout(timer);
+    timer = setTimeout(sync, ms == null ? 4000 : ms);
+  }
+
+  // imagem que veio de outro aparelho e ainda não está neste
+  async function fetchImage(id) {
+    var st = app.state();
+    var fid = st.cloudImages && st.cloudImages[id];
+    if (!fid || !hasToken()) return null;
+    try {
+      var r = await api(API + 'files/' + fid + '?alt=media');
+      var blob = await r.blob();
+      await Stash.idb.putImage(id, blob);
+      return blob;
+    } catch (e) { return null; }
+  }
+  function deleteImage(id) {
+    var st = app.state();
+    var fid = st.cloudImages && st.cloudImages[id];
+    if (!fid) return;
+    delete st.cloudImages[id];
+    if (hasToken()) api(API + 'files/' + fid, { method: 'DELETE' }).catch(function () {});
+  }
+
+  function init(hooks) {
+    app = hooks;
+    loadToken();
+    if (!enabled() || !available()) { status = 'off'; return; }
+    loadGis().catch(function () {});
+    if (hasToken()) sync(); else setStatus('login');
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible' && Date.now() - lastAuto > 30000) { lastAuto = Date.now(); if (hasToken()) sync(); else if (enabled()) setStatus('login'); }
+    });
+  }
+
+  return {
+    init: init, sync: sync, schedule: schedule, signIn: signIn, signOut: signOut, loadGis: loadGis,
+    fetchImage: fetchImage, deleteImage: deleteImage, merge: merge,
+    enabled: enabled, available: available, hasToken: hasToken,
+    status: function () { return status; }, error: function () { return lastError; }
+  };
+})();

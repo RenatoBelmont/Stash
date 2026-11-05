@@ -76,3 +76,7 @@ Stash.COLOR_CHOICES = ['#fbbf24', '#fb923c', '#f87171', '#fb7185', '#f472b6', '#
   '#38bdf8', '#22d3ee', '#2dd4bf', '#34d399', '#a3e635', '#facc15', '#a1a1aa'];
 
 Stash.PAGES_URL = 'https://renatobelmont.github.io/Stash/';
+
+/* ID do cliente OAuth do Google (Drive). Não é secreto: só funciona em
+   https://renatobelmont.github.io. Também pode ser colado em Configurações. */
+Stash.DRIVE_CLIENT_ID = '';

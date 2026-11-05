@@ -4,10 +4,10 @@
    - Recebe o que você manda pelo botão "Compartilhar" do celular
      (links, textos e imagens) e entrega para o app.
    ========================================================================= */
-var CACHE = 'stash-v2';
+var CACHE = 'stash-v3';
 var SHELL = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
-  './js/data.js', './js/storage.js', './js/meta.js', './js/classify.js', './js/app.js',
+  './js/data.js', './js/storage.js', './js/meta.js', './js/classify.js', './js/cloud.js', './js/app.js',
   './assets/icon.svg', './assets/logo.svg', './assets/icon-192.png', './assets/icon-512.png'
 ];
 
