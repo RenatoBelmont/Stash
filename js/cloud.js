@@ -11,6 +11,8 @@ window.Stash = window.Stash || {};
 
 Stash.cloud = (function () {
   var SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+  // Só leitura, pedida apenas quando você manda analisar um Google Docs/Planilha/Apresentação
+  var READ = 'https://www.googleapis.com/auth/drive.readonly';
   var API = 'https://www.googleapis.com/drive/v3/';
   var UP = 'https://www.googleapis.com/upload/drive/v3/';
   var TK = 'stash.drive.token';
@@ -50,15 +52,17 @@ Stash.cloud = (function () {
     return standalone && ios;
   }
   function redirectUri() { return location.origin + location.pathname.replace(/index\.html$/, ''); }
-  function signInRedirect(connecting) {
+  function scopesFor(wantRead) { return SCOPE + (wantRead || canReadDrive() ? ' ' + READ : ''); }
+  function signInRedirect(connecting, wantRead, pendingAnalyze) {
     var st = Math.random().toString(36).slice(2) + Date.now().toString(36);
     try {
       localStorage.setItem('stash.oauth.state', st);
       if (connecting) localStorage.setItem('stash.oauth.connect', '1');
+      if (pendingAnalyze) localStorage.setItem('stash.pendingAnalyze', pendingAnalyze);
     } catch (e) {}
     var q = {
       client_id: clientId(), redirect_uri: redirectUri(), response_type: 'token',
-      scope: SCOPE, include_granted_scopes: 'true', state: st
+      scope: scopesFor(wantRead), include_granted_scopes: 'true', state: st
     };
     location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + Object.keys(q).map(function (k) { return k + '=' + encodeURIComponent(q[k]); }).join('&');
     return new Promise(function () {}); // a página vai sair daqui
@@ -74,14 +78,15 @@ Stash.cloud = (function () {
     if (history.replaceState) history.replaceState(null, '', location.pathname + location.search);
     if (h.get('error')) return { error: h.get('error') === 'access_denied' ? 'Login cancelado' : 'Login falhou: ' + h.get('error') };
     if (!expected || h.get('state') !== expected) return { error: 'Login inválido, tente de novo' };
-    token = { access: h.get('access_token'), exp: Date.now() + (Number(h.get('expires_in')) || 3600) * 1000 };
+    token = { access: h.get('access_token'), exp: Date.now() + (Number(h.get('expires_in')) || 3600) * 1000, scopes: h.get('scope') || SCOPE };
     try { localStorage.setItem(TK, JSON.stringify(token)); } catch (e) {}
     return { ok: true, connecting: connecting };
   }
 
   // Precisa ser chamado direto de um clique (senão o navegador bloqueia a janela de login)
-  function signIn(connecting) {
-    if (clientId() && isIosApp()) return signInRedirect(connecting);
+  // wantRead: pede também a leitura dos seus arquivos do Drive (para analisar Google Docs)
+  function signIn(connecting, wantRead, pendingAnalyze) {
+    if (clientId() && isIosApp()) return signInRedirect(connecting, wantRead, pendingAnalyze);
     return new Promise(function (resolve, reject) {
       if (!clientId()) return reject(new Error('Falta o ID do cliente OAuth'));
       if (!(window.google && google.accounts && google.accounts.oauth2)) {
@@ -89,10 +94,11 @@ Stash.cloud = (function () {
       }
       var client = google.accounts.oauth2.initTokenClient({
         client_id: clientId(),
-        scope: SCOPE,
+        scope: scopesFor(wantRead),
+        include_granted_scopes: true,
         callback: function (r) {
           if (r.error) return reject(new Error(r.error_description || r.error));
-          token = { access: r.access_token, exp: Date.now() + (Number(r.expires_in) || 3600) * 1000 };
+          token = { access: r.access_token, exp: Date.now() + (Number(r.expires_in) || 3600) * 1000, scopes: r.scope || SCOPE };
           try { localStorage.setItem(TK, JSON.stringify(token)); } catch (e) {}
           resolve();
         },
@@ -102,6 +108,20 @@ Stash.cloud = (function () {
       });
       client.requestAccessToken({ prompt: '' });
     });
+  }
+
+  function canReadDrive() { return hasToken() && String(token.scopes || '').indexOf(READ) !== -1; }
+
+  /* Lê o texto de um Google Docs / Planilha / Apresentação (ou arquivo de texto) do seu Drive */
+  async function readGoogleFile(id) {
+    var r = await api(API + 'files/' + encodeURIComponent(id) + '?fields=name,mimeType,description&supportsAllDrives=true');
+    var f = await r.json();
+    var exp = { 'application/vnd.google-apps.document': 'text/plain', 'application/vnd.google-apps.spreadsheet': 'text/csv', 'application/vnd.google-apps.presentation': 'text/plain' }[f.mimeType];
+    var text = '';
+    if (exp) text = await (await api(API + 'files/' + encodeURIComponent(id) + '/export?mimeType=' + encodeURIComponent(exp))).text();
+    else if (/^text\/|json|xml|csv/.test(f.mimeType || '')) text = await (await api(API + 'files/' + encodeURIComponent(id) + '?alt=media&supportsAllDrives=true')).text();
+    else text = 'Arquivo do Google Drive do tipo ' + f.mimeType + (f.description ? '. Descrição: ' + f.description : '');
+    return { title: f.name || '', text: text };
   }
 
   function signOut() {
@@ -319,7 +339,8 @@ Stash.cloud = (function () {
   }
 
   return {
-    init: init, sync: sync, isIosApp: isIosApp, schedule: schedule, signIn: signIn, signOut: signOut, loadGis: loadGis,
+    init: init, sync: sync, isIosApp: isIosApp, canReadDrive: canReadDrive, readGoogleFile: readGoogleFile,
+    hasClient: function () { return !!clientId() && available(); }, schedule: schedule, signIn: signIn, signOut: signOut, loadGis: loadGis,
     fetchImage: fetchImage, deleteImage: deleteImage, merge: merge,
     enabled: enabled, available: available, hasToken: hasToken,
     status: function () { return status; }, error: function () { return lastError; }, pending: function () { return pending; }

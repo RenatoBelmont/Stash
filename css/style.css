@@ -247,6 +247,14 @@ dialog.sheet::backdrop { background: rgb(9 9 11 / .5); backdrop-filter: blur(2px
 .drop-veil { position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; background: rgb(9 9 11 / .45); backdrop-filter: blur(3px); color: #fff; font-size: 1.125rem; font-weight: 600; gap: .75rem; pointer-events: none; }
 .drop-veil.on { display: flex; }
 
+/* Analisar com IA (detalhes do item) */
+.ai-box { display: flex; align-items: center; gap: .75rem; padding: .625rem .75rem; border-radius: .875rem;
+  border: 1px solid rgba(245, 158, 11, .45); background: rgba(251, 191, 36, .08); }
+.ai-box .note { margin: 0; }
+.ai-btn { flex-shrink: 0; border-color: rgba(245, 158, 11, .6); color: rgb(var(--text-primary)); }
+.ai-btn .ic { color: #f59e0b; }
+@media (max-width: 860px) { .ai-box { flex-direction: column; align-items: stretch; } }
+
 /* Puxar para atualizar (app instalado) */
 .ptr { position: fixed; left: 50%; top: calc(env(safe-area-inset-top) - 2.75rem); z-index: 80; width: 2.5rem; height: 2.5rem; border-radius: 50%;
   display: flex; align-items: center; justify-content: center; transform: translate(-50%, 0);

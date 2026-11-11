@@ -40,6 +40,8 @@ Stash.meta = (function () {
     if (/threads\.(net|com)/.test(h)) return 'Post do Threads';
     if (/facebook\.com|fb\.watch/.test(h)) return 'Post do Facebook';
     if (/pinterest\.|pin\.it/.test(h) && /\/pin\//.test(u)) return 'Pin do Pinterest';
+    if (/docs\.google\.com/.test(h)) return /\/spreadsheets\//.test(u) ? 'Planilha do Google' : /\/presentation\//.test(u) ? 'Apresentação do Google' : /\/forms\//.test(u) ? 'Formulário do Google' : 'Documento do Google';
+    if (/drive\.google\.com/.test(h)) return 'Arquivo do Google Drive';
     try {
       var x = new URL(u);
       var segs = x.pathname.split('/').filter(Boolean);
@@ -96,7 +98,31 @@ Stash.meta = (function () {
   var GENERIC = /(^|\.)(youtube\.com|youtu\.be|instagram\.com|tiktok\.com|x\.com|twitter\.com|threads\.net|threads\.com|facebook\.com|fb\.watch|reddit\.com|bsky\.app|pinterest\.[a-z.]+|pin\.it|vimeo\.com|tumblr\.com|linkedin\.com|t\.co|bit\.ly|google\.com|drive\.google\.com|medium\.com|substack\.com)$/;
   function isGenericHost(h) { return GENERIC.test(h); }
 
+  // Google Docs / Planilhas / Apresentações / arquivos do Drive: devolve o id do arquivo
+  function googleFileId(u) {
+    if (!/(^|\.)(docs|drive)\.google\.com$/.test(host(u))) return '';
+    var m = String(u).match(/\/d\/([\w-]{20,})/) || String(u).match(/[?&]id=([\w-]{20,})/);
+    return m ? m[1] : '';
+  }
+
+  /* Texto de qualquer página pública, via Jina Reader (grátis, sem chave). Devolve null se não der. */
+  async function readPage(url) {
+    try {
+      var r = await timeout(fetch('https://r.jina.ai/' + url), 25000);
+      if (!r.ok) return null;
+      var t = await r.text();
+      var title = (t.match(/^Title:\s*(.+)$/m) || [])[1] || '';
+      var body = t.split(/^Markdown Content:\s*$/m)[1] || t;
+      body = body.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\n{3,}/g, '\n\n').trim();
+      // páginas de login / bloqueio não ajudam
+      var head = body.slice(0, 600);
+      if (body.length < 80 || (body.length < 1500 && /(sign in|log in|faça login|fazer login)/i.test(head))) return null;
+      return { title: title.trim(), text: body };
+    } catch (e) { return null; }
+  }
+
   return {
+    googleFileId: googleFileId, readPage: readPage,
     host: host, isGenericHost: isGenericHost, extractUrls: extractUrls, isImageUrl: isImageUrl, isVideoFile: isVideoFile,
     youtubeId: youtubeId, mediaType: mediaType, prettyFromUrl: prettyFromUrl, fetchMeta: fetchMeta
   };

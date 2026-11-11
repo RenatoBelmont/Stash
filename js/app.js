@@ -345,15 +345,22 @@
       item.category = r.category;
       item.tags = r.tags;
       item.ai = false; item.aiProvider = '';
-      var useAI = aiOn() && (state.settings.aiMode === 'always' || opt.forceAI || r.confidence < 6 || item.kind === 'imagem' || !!item.printId);
+      // análise profunda: lê o conteúdo da página/documento (botão "Analisar com IA";
+      // automática para Google Docs/Planilhas/Apresentações recém-guardados)
+      var deep = aiOn() && (opt.deep || (opt.isNew && item.url && !!M.googleFileId(item.url)));
+      var useAI = aiOn() && (deep || state.settings.aiMode === 'always' || opt.forceAI || r.confidence < 6 || item.kind === 'imagem' || !!item.printId);
       if (useAI) {
         try {
           var blob = await getBlob(item.imageId || item.printId);
-          var out = await C.ai(state, item, blob);
+          var content = deep ? await readContent(item) : null;
+          if (deep) item.contentRead = content ? content.source : '';
+          var out = await C.ai(state, item, blob, content);
           if (out.category) item.category = out.category;
           if (out.tags && out.tags.length) item.tags = out.tags;
-          if (out.title && (item.titleFromUrl || item.kind === 'imagem') && !item.userTitle) { item.title = out.title; item.titleFromUrl = false; }
-          if (out.summary && !item.description) item.description = out.summary;
+          if (content && !item.userTitle && (out.title || content.title)) { item.title = out.title || content.title; item.titleFromUrl = false; }
+          else if (out.title && (item.titleFromUrl || item.kind === 'imagem') && !item.userTitle) { item.title = out.title; item.titleFromUrl = false; }
+          if (out.summary && (content || !item.description)) item.description = out.summary;
+          if (deep) item.analyzedAt = Date.now();
           item.ai = true;
           item.aiProvider = out.provider || 'gemini';
           save();
@@ -366,6 +373,27 @@
     } catch (e) { console.warn('[Stash]', e); }
     item.loading = false; item.updated = Date.now();
     save(); render();
+  }
+
+  /* Conteúdo do link: Google Docs pelo Drive (se você autorizou a leitura), senão a página pública via Jina Reader */
+  async function readContent(item) {
+    if (!item.url) return null;
+    var gid = M.googleFileId(item.url);
+    if (gid && S.cloud.canReadDrive()) {
+      try { var c = await S.cloud.readGoogleFile(gid); if (c && c.text) { c.source = 'drive'; return c; } }
+      catch (e) { console.warn('[Stash] Drive (ler documento):', e); }
+    }
+    var pg = await M.readPage(item.url);
+    if (pg) { pg.source = 'web'; return pg; }
+    return null;
+  }
+  async function analyze(item) {
+    aiWarned = 0; aiMsg = '';
+    await processItem(item, { deep: true, forceAI: true });
+    if (aiMsg) { toast(aiMsg); aiMsg = ''; return; }
+    var cat = catById(item.category).name;
+    if (!item.url || item.contentRead) toast('Analisado: ' + cat);
+    else toast('Não consegui ler o conteúdo; analisei pelo título e pelo link: ' + cat);
   }
 
   function aiError(e) {
@@ -437,6 +465,14 @@
     return src ? '<img class="preview-media" src="' + esc(src) + '" alt="" onerror="this.remove()">' : '';
   }
 
+  function aiBoxHtml(it) {
+    var gid = it.url && M.googleFileId(it.url);
+    var what = it.kind === 'imagem' ? 'Lê a imagem' : gid ? 'Lê o documento no seu Google Drive' : it.printId ? 'Lê a página e o print' : 'Lê o conteúdo da página';
+    var last = it.analyzedAt ? ' Última análise: ' + new Date(it.analyzedAt).toLocaleDateString('pt-BR') + (it.contentRead ? '' : ' (sem acesso ao conteúdo)') + '.' : '';
+    return '<div class="ai-box"><button type="button" class="btn-ghost ai-btn" id="fAi">' + I('sparkles', 16) + 'Analisar com IA</button>' +
+      '<p class="note">' + (aiOn() ? what + ' e reorganiza categoria, título, resumo e tags.' + last : 'Configure o Gemini ou o Groq (grátis) em Configurações para usar.') + '</p></div>';
+  }
+
   function openItem(id) {
     var item = state.items.find(function (x) { return x.id === id; });
     if (!item) return;
@@ -470,6 +506,7 @@
       '<div id="mediaBox">' + mediaHtml(draft) + '</div>' +
       (draft.url ? '<a class="link-out" href="' + esc(draft.url) + '" target="_blank" rel="noopener">' + I('external-link', 14) + '<span>' + esc(draft.url) + '</span></a>' : '') +
       (draft.description ? '<p class="secondary small">' + esc(draft.description) + '</p>' : '') +
+      aiBoxHtml(draft) +
       '<label class="field"><span>Título</span><input class="input-field" id="fTitle" value="' + esc(draft.title) + '"></label>' +
       '<label class="field"><span>Categoria</span><select class="input-field" id="fCat">' +
       state.categories.map(function (c) { return '<option value="' + esc(c.id) + '"' + (c.id === draft.category ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</select></label>' +
@@ -483,7 +520,7 @@
       '<div class="sheet-foot">' +
       '<button type="button" class="btn-primary" id="fSave">' + I('check', 16) + 'Salvar</button>' +
       '<button type="button" class="btn-ghost btn-icon" id="fFav" title="Favorito">' + I('star', 16) + '</button>' +
-      '<button type="button" class="btn-ghost btn-icon" id="fRe" title="Reanalisar">' + I('refresh-cw', 16) + '</button>' +
+      '<button type="button" class="btn-ghost btn-icon" id="fRe" title="Atualizar dados do link (título, imagem, categoria)">' + I('refresh-cw', 16) + '</button>' +
       '<span class="spacer"></span>' +
       '<button type="button" class="btn-ghost btn-icon danger" id="fDel" title="Excluir">' + I('trash-2', 16) + '</button>' +
       '</div>';
@@ -543,6 +580,19 @@
         closeDialog();
         if (newPrint && aiOn()) processItem(item, { forceAI: true });
         else toast('Salvo');
+      };
+      var gidOpen = draft.url && M.googleFileId(draft.url);
+      if (gidOpen && !S.cloud.canReadDrive() && S.cloud.hasClient() && !S.cloud.isIosApp()) S.cloud.loadGis().catch(function () {}); // deixa o login pronto para o clique
+      $('#fAi', d).onclick = async function () {
+        if (!aiOn()) { closeDialog(); toast('Coloque uma chave do Gemini ou do Groq para usar a análise.'); openSettings(); return; }
+        commit();
+        // Google Docs: pede a permissão de leitura do Drive (só na primeira vez)
+        if (gidOpen && !S.cloud.canReadDrive() && S.cloud.hasClient()) {
+          try { await S.cloud.signIn(false, true, item.id); }
+          catch (e) { toast(e.message + '. Vou tentar ler como página pública.'); }
+        }
+        closeDialog();
+        analyze(item);
       };
       $('#fRe', d).onclick = function () {
         commit(); closeDialog(); aiWarned = 0;
@@ -1089,6 +1139,12 @@
     }
   });
   renderCloud();
+  (function () {
+    var pend = null;
+    try { pend = localStorage.getItem('stash.pendingAnalyze'); localStorage.removeItem('stash.pendingAnalyze'); } catch (e) {}
+    var it = pend && state.items.find(function (x) { return x.id === pend; });
+    if (it) setTimeout(function () { analyze(it); }, 400);
+  })();
   handleIncoming();
   window.StashApp = { state: function () { return state; }, addStuff: addStuff }; // para depuração no console
 })();

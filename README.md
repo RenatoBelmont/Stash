@@ -25,6 +25,15 @@ HTML + CSS + JS puro, sem build. Mesmo padrão visual do Waypoint (claro creme /
    - **Groq** (reserva): chave em https://console.groq.com/keys. Usado quando o Gemini falha ou atinge o limite grátis (ou como principal, se for a única chave). O Stash escolhe sozinho um modelo de texto e outro que enxerga imagens; se não houver modelo de imagem, usa só o texto. A Groq diz que não usa seus dados para treinar modelos.
    - Se os dois falharem, valem as regras locais. As chaves ficam só no navegador (não vão para o backup nem para a nuvem).
 
+## Analisar com IA
+
+Nos detalhes de um item, **✨ Analisar com IA** lê o **conteúdo** do link e reorganiza o item: categoria, título, resumo e tags (usa o Gemini, ou o Groq de reserva).
+
+- **Páginas comuns:** o texto vem do [Jina Reader](https://jina.ai/reader) (`r.jina.ai`, grátis, sem chave). O endereço da página é enviado a esse serviço.
+- **Google Docs, Planilhas e Apresentações:** lidos direto do seu Google Drive, inclusive os privados. Na primeira vez o Google pede a permissão de **leitura** dos seus arquivos do Drive (só leitura; o Stash não altera nada). No app do iPhone, o login vai para a página do Google e a análise roda ao voltar.
+- **Links de Google Docs novos** já são analisados ao guardar, se a IA estiver configurada (pelo Drive, se você já autorizou a leitura; senão pela versão pública).
+- Páginas que exigem login (Instagram, documentos privados sem autorização) não podem ser lidas: aí a IA usa o título, o link e o print, se houver.
+
 ## Nuvem (Google Drive, grátis)
 
 Sincroniza itens, categorias, correções e imagens entre aparelhos. Os dados ficam na **pasta oculta do app** no seu Drive (o Stash não enxerga seus outros arquivos). Só funciona no endereço do GitHub Pages: o arquivo aberto direto no PC não consegue fazer o login do Google.
@@ -53,6 +62,7 @@ Categorias podem acompanhar status (ex.: Séries: *Quero ver → Assistindo → 
 
 ## Serviços online usados
 
+- [Jina Reader](https://jina.ai/reader) (grátis): texto das páginas para o *Analisar com IA*.
 - [noembed.com](https://noembed.com) e [microlink.io](https://microlink.io) (grátis, ~50 consultas/dia): título, descrição e imagem dos links.
 - [Lucide](https://lucide.dev) via jsDelivr (versão fixa 0.460.0): ícones.
 - Gemini API e Groq API (opcionais).

@@ -133,7 +133,7 @@ Stash.classify = (function () {
     });
   }
 
-  function buildPrompt(state, item, hasImage) {
+  function buildPrompt(state, item, hasImage, content) {
     var cats = state.categories.map(function (c) { return '- ' + c.id + ': ' + c.name; }).join('\n');
     return 'Você organiza uma coleção pessoal de links e imagens salvos da internet.\n' +
       'Escolha UMA categoria para o item abaixo (use o id exato) e sugira até 5 tags curtas em português, em minúsculas.\n' +
@@ -147,7 +147,10 @@ Stash.classify = (function () {
       (item.description ? 'Descrição: ' + item.description + '\n' : '') +
       (item.author ? 'Autor: ' + item.author + '\n' : '') +
       (item.notes ? 'Nota do usuário: ' + item.notes + '\n' : '') +
-      '\nResponda só com JSON: {"category":"<id>","title":"<título curto e claro em português, se o atual for ruim ou ausente>","summary":"<resumo de 1 frase>","tags":["..."]}';
+      (content && content.text ? '\nCONTEÚDO DA PÁGINA/DOCUMENTO (trecho' + (content.title ? ', título: ' + content.title : '') + '). Classifique principalmente por ele:\n<<<\n' + content.text.slice(0, 12000) + '\n>>>\n' : '') +
+      (content && content.text
+        ? '\nResponda só com JSON: {"category":"<id>","title":"<título curto e claro que descreva o conteúdo; pode manter o original se for bom>","summary":"<resumo do conteúdo em 1 ou 2 frases, em português>","tags":["..."]}'
+        : '\nResponda só com JSON: {"category":"<id>","title":"<título curto e claro em português, se o atual for ruim ou ausente>","summary":"<resumo de 1 frase>","tags":["..."]}');
   }
   function parseOut(state, txt) {
     var out = JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1));
@@ -161,10 +164,10 @@ Stash.classify = (function () {
     return e;
   }
 
-  async function gemini(state, item, imageBlob, retried) {
+  async function gemini(state, item, imageBlob, retried, content) {
     var s = state.settings;
     var model = await ensureModel(state);
-    var parts = [{ text: buildPrompt(state, item, !!imageBlob) }];
+    var parts = [{ text: buildPrompt(state, item, !!imageBlob, content) }];
     if (imageBlob) parts.push({ inline_data: { mime_type: imageBlob.type || 'image/jpeg', data: await blobToBase64(imageBlob) } });
 
     var r = await fetch(API + 'models/' + encodeURIComponent(model) + ':generateContent', {
@@ -175,7 +178,7 @@ Stash.classify = (function () {
     var j = await r.json().catch(function () { return {}; });
     if (!r.ok) {
       // modelo descontinuado/renomeado: atualiza a lista e tenta de novo uma vez
-      if (r.status === 404 && !retried) { s.geminiModel = ''; return gemini(state, item, imageBlob, true); }
+      if (r.status === 404 && !retried) { s.geminiModel = ''; return gemini(state, item, imageBlob, true, content); }
       throw httpError(r, j, 'Gemini');
     }
     var txt = ((((j.candidates || [])[0] || {}).content || {}).parts || []).map(function (p) { return p.text || ''; }).join('');
@@ -212,12 +215,12 @@ Stash.classify = (function () {
     return { text: s.groqModel, vision: s.groqVisionModel || '' };
   }
 
-  async function groq(state, item, imageBlob, retried) {
+  async function groq(state, item, imageBlob, retried, content) {
     var s = state.settings;
     var m = await groqModels(state);
     var useImg = !!(imageBlob && m.vision);           // sem modelo de imagem: usa só o texto
     var model = useImg ? m.vision : m.text;
-    var prompt = buildPrompt(state, item, useImg);
+    var prompt = buildPrompt(state, item, useImg, content);
     var content = useImg
       ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + (imageBlob.type || 'image/jpeg') + ';base64,' + await blobToBase64(imageBlob) } }]
       : prompt;
@@ -235,7 +238,7 @@ Stash.classify = (function () {
       // modelo saiu do catálogo: escolhe de novo e tenta uma vez
       if ((r.status === 404 || r.status === 400 && /model/i.test(JSON.stringify(j))) && !retried) {
         s.groqModel = ''; s.groqVisionModel = '';
-        return groq(state, item, imageBlob, true);
+        return groq(state, item, imageBlob, true, content);
       }
       throw httpError(r, j, 'Groq');
     }
@@ -246,16 +249,17 @@ Stash.classify = (function () {
   }
 
   /* Ordem: Gemini → Groq. Só cai para o Groq se o Gemini falhar. */
-  function ai(state, item, imageBlob) {
+  // content (opcional): { title, text } lido da página ou do documento
+  function ai(state, item, imageBlob, content) {
     var s = state.settings;
     return serial(async function () {
       var errors = [];
       if (s.geminiKey) {
-        try { var g = await gemini(state, item, imageBlob); g.provider = 'gemini'; return g; }
+        try { var g = await gemini(state, item, imageBlob, false, content); g.provider = 'gemini'; return g; }
         catch (e) { console.warn('[Stash] Gemini falhou, tentando o Groq:', e); errors.push(e); }
       }
       if (s.groqKey) {
-        try { var q = await groq(state, item, imageBlob); q.provider = 'groq'; q.fallback = errors.length > 0; return q; }
+        try { var q = await groq(state, item, imageBlob, false, content); q.provider = 'groq'; q.fallback = errors.length > 0; return q; }
         catch (e) { console.warn('[Stash] Groq falhou:', e); errors.push(e); }
       }
       var err = errors[errors.length - 1] || new Error('Nenhuma IA configurada');
