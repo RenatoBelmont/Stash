@@ -62,8 +62,13 @@ Stash.idb = (function () {
         if (!d.objectStoreNames.contains('images')) d.createObjectStore('images');
         if (!d.objectStoreNames.contains('inbox')) d.createObjectStore('inbox', { autoIncrement: true });
       };
-      r.onsuccess = function () { resolve(r.result); };
-      r.onerror = function () { reject(r.error); };
+      r.onsuccess = function () {
+        var d = r.result;
+        // outra aba/versão precisa atualizar o banco: solta a conexão (reabre sozinho depois)
+        d.onversionchange = function () { d.close(); dbp = null; };
+        resolve(d);
+      };
+      r.onerror = function () { dbp = null; reject(r.error); };
     });
     return dbp;
   }

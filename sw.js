@@ -4,7 +4,7 @@
    - Recebe o que você manda pelo botão "Compartilhar" do celular
      (links, textos e imagens) e entrega para o app.
    ========================================================================= */
-var CACHE = 'stash-v8';
+var CACHE = 'stash-v9';
 var SHELL = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/data.js', './js/storage.js', './js/meta.js', './js/classify.js', './js/cloud.js', './js/app.js',
@@ -29,7 +29,7 @@ function openDb() {
       if (!d.objectStoreNames.contains('images')) d.createObjectStore('images');
       if (!d.objectStoreNames.contains('inbox')) d.createObjectStore('inbox', { autoIncrement: true });
     };
-    r.onsuccess = function () { resolve(r.result); };
+    r.onsuccess = function () { var d = r.result; d.onversionchange = function () { d.close(); }; resolve(d); };
     r.onerror = function () { reject(r.error); };
   });
 }
@@ -45,6 +45,7 @@ async function receiveShare(request) {
       t.objectStore('inbox').add(entry);
       t.oncomplete = resolve; t.onerror = function () { reject(t.error); };
     });
+    db.close();
   } catch (e) { /* se falhar, o app abre normalmente */ }
   return Response.redirect(new URL('./?shared=1', self.registration.scope).href, 303);
 }
