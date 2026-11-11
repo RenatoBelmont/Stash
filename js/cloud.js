@@ -15,7 +15,7 @@ Stash.cloud = (function () {
   var UP = 'https://www.googleapis.com/upload/drive/v3/';
   var TK = 'stash.drive.token';
   var app = null, token = null, status = 'off', lastError = '';
-  var timer = null, running = null, again = false, lastAuto = 0;
+  var timer = null, running = null, again = false, lastAuto = 0, pending = 0;
 
   /* ---------- token ---------- */
   function loadToken() {
@@ -113,10 +113,21 @@ Stash.cloud = (function () {
   }
 
   /* ---------- Drive ---------- */
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  // Falha de rede (no Safari: "Load failed"): tenta de novo algumas vezes antes de desistir
   async function api(url, opt) {
     opt = opt || {};
     opt.headers = Object.assign({ Authorization: 'Bearer ' + token.access }, opt.headers || {});
-    var r = await fetch(url, opt);
+    var r, delays = [1500, 4000];
+    for (var attempt = 0; ; attempt++) {
+      try { r = await fetch(url, opt); break; }
+      catch (e) {
+        if (attempt >= delays.length || document.hidden) {
+          var n = new Error('sem conexão com o Google Drive'); n.network = true; n.detail = e && e.message; throw n;
+        }
+        await wait(delays[attempt]);
+      }
+    }
     if (r.status === 401) {
       token = null; try { localStorage.removeItem(TK); } catch (e) {}
       var a = new Error('Login expirou'); a.auth = true; throw a;
@@ -135,9 +146,14 @@ Stash.cloud = (function () {
     return (j.files || [])[0] || null;
   }
   async function upload(name, blob, fileId) {
+    var type = blob.type || 'application/octet-stream';
+    var buf;
+    try { buf = await Stash.toBuffer(blob); }      // lê os bytes antes de enviar (evita o bug do Safari)
+    catch (e) { var u = new Error('arquivo ilegível neste aparelho'); u.unreadable = true; throw u; }
+    blob = new Blob([buf], { type: type });
     if (fileId) {
       var r = await api(UP + 'files/' + fileId + '?uploadType=media&fields=id', {
-        method: 'PATCH', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob
+        method: 'PATCH', headers: { 'Content-Type': type }, body: buf
       });
       return (await r.json()).id;
     }
@@ -203,30 +219,49 @@ Stash.cloud = (function () {
     clearTimeout(timer);
     running = (async function () {
       setStatus('syncing');
+      var step = 'buscar os dados da nuvem';
       try {
         var f = await findFile('stash.json');
         var remote = null;
-        if (f) { var r = await api(API + 'files/' + f.id + '?alt=media'); remote = await r.json(); }
+        if (f) { step = 'baixar os dados da nuvem'; var r = await api(API + 'files/' + f.id + '?alt=media'); remote = await r.json(); }
         app.apply(merge(app.state(), remote));
 
-        // envia imagens que ainda não estão na nuvem
+        // envia imagens que ainda não estão na nuvem: uma imagem com problema não trava o resto
+        step = 'enviar imagens';
         var st = app.state();
         st.cloudImages = st.cloudImages || {};
         var ids = [];
         st.items.forEach(function (i) { [i.imageId, i.printId].forEach(function (x) { if (x && ids.indexOf(x) === -1) ids.push(x); }); });
+        pending = 0;
         for (var k = 0; k < ids.length; k++) {
           if (st.cloudImages[ids[k]]) continue;
-          var blob = await Stash.idb.getImage(ids[k]).catch(function () { return null; });
-          if (blob) st.cloudImages[ids[k]] = await upload('img-' + ids[k], blob);
+          try {
+            var blob = await Stash.idb.getImage(ids[k]);
+            if (!blob) continue;                        // imagem de outro aparelho que ainda não chegou aqui
+            st.cloudImages[ids[k]] = await upload('img-' + ids[k], blob);
+            if (blob.size) Stash.idb.putImage(ids[k], blob).catch(function () {}); // regrava no formato novo
+          } catch (e) {
+            if (e.auth) throw e;
+            if (e.network && document.hidden) throw e;
+            console.warn('[Stash] imagem não enviada:', ids[k], e);
+            pending++;
+          }
         }
 
+        step = 'enviar os dados';
         await upload('stash.json', new Blob([JSON.stringify(snapshot(st))], { type: 'application/json' }), f && f.id);
         st.lastSync = Date.now();
         app.saveLocal();
         setStatus('ok');
+        if (pending) schedule(60000);                   // tenta as imagens pendentes de novo daqui a pouco
       } catch (e) {
-        console.warn('[Stash] Drive:', e);
-        setStatus(e.auth ? 'login' : 'error', e.message);
+        console.warn('[Stash] Drive (' + step + '):', e);
+        if (e.auth) setStatus('login');
+        else if (e.network) {
+          // o iOS corta a conexão quando o app vai para segundo plano: tenta de novo sozinho
+          setStatus('error', 'sem conexão ao ' + step + '. Tento de novo sozinho');
+          schedule(document.hidden ? 5000 : 20000);
+        } else setStatus('error', e.message + ' (ao ' + step + ')');
       }
       running = null;
       if (again) { again = false; schedule(1500); }
@@ -274,7 +309,7 @@ Stash.cloud = (function () {
     }
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState !== 'visible' || !enabled()) return;
-      if (Date.now() - lastAuto < 15000) return;
+      if (Date.now() - lastAuto < 15000 && status !== 'error') return;
       lastAuto = Date.now();
       if (hasToken()) sync(); else setStatus('login');
     });
@@ -287,6 +322,6 @@ Stash.cloud = (function () {
     init: init, sync: sync, isIosApp: isIosApp, schedule: schedule, signIn: signIn, signOut: signOut, loadGis: loadGis,
     fetchImage: fetchImage, deleteImage: deleteImage, merge: merge,
     enabled: enabled, available: available, hasToken: hasToken,
-    status: function () { return status; }, error: function () { return lastError; }
+    status: function () { return status; }, error: function () { return lastError; }, pending: function () { return pending; }
   };
 })();

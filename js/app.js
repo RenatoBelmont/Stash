@@ -931,8 +931,9 @@
     var st = S.cloud.status();
     if (st === 'syncing') return 'Sincronizando…';
     if (st === 'login') return 'Toque para entrar de novo no Google e sincronizar';
-    if (st === 'error') return 'Erro ao sincronizar: ' + S.cloud.error();
-    if (state.lastSync) return 'Sincronizado às ' + new Date(state.lastSync).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    if (st === 'error') return 'Não sincronizou: ' + S.cloud.error();
+    var pend = S.cloud.pending() ? ' · ' + S.cloud.pending() + (S.cloud.pending() === 1 ? ' imagem pendente' : ' imagens pendentes') : '';
+    if (state.lastSync) return 'Sincronizado às ' + new Date(state.lastSync).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) + pend;
     return 'Google Drive conectado';
   }
   function renderCloud() {

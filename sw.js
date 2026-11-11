@@ -4,7 +4,7 @@
    - Recebe o que você manda pelo botão "Compartilhar" do celular
      (links, textos e imagens) e entrega para o app.
    ========================================================================= */
-var CACHE = 'stash-v6';
+var CACHE = 'stash-v8';
 var SHELL = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/data.js', './js/storage.js', './js/meta.js', './js/classify.js', './js/cloud.js', './js/app.js',
@@ -23,7 +23,7 @@ self.addEventListener('activate', function (e) {
 
 function openDb() {
   return new Promise(function (resolve, reject) {
-    var r = indexedDB.open('stash', 1);
+    var r = indexedDB.open('stash', 2); // v2: recria as gavetas se o banco existir vazio
     r.onupgradeneeded = function () {
       var d = r.result;
       if (!d.objectStoreNames.contains('images')) d.createObjectStore('images');

@@ -56,7 +56,7 @@ Stash.idb = (function () {
     if (dbp) return dbp;
     dbp = new Promise(function (resolve, reject) {
       if (!window.indexedDB) return reject(new Error('IndexedDB indisponível'));
-      var r = indexedDB.open('stash', 1);
+      var r = indexedDB.open('stash', 2); // v2: recria as gavetas se o banco existir vazio
       r.onupgradeneeded = function () {
         var d = r.result;
         if (!d.objectStoreNames.contains('images')) d.createObjectStore('images');
@@ -79,8 +79,21 @@ Stash.idb = (function () {
     });
   }
   return {
-    putImage: function (id, blob) { return run('images', 'readwrite', function (s) { return s.put(blob, id); }); },
-    getImage: function (id) { return run('images', 'readonly', function (s) { return s.get(id); }); },
+    /* As imagens são guardadas como bytes (ArrayBuffer), não como Blob: no Safari (iPhone),
+       um Blob lido do IndexedDB depois de reabrir o app às vezes não pode ser enviado ("Load failed"). */
+    putImage: function (id, blob) {
+      return Stash.toBuffer(blob).then(function (buf) {
+        return run('images', 'readwrite', function (s) { return s.put({ buf: buf, type: blob.type || 'image/jpeg' }, id); });
+      });
+    },
+    getImage: function (id) {
+      return run('images', 'readonly', function (s) { return s.get(id); }).then(function (v) {
+        if (!v) return null;
+        if (v instanceof Blob) return v;                 // guardado por versões antigas
+        if (v.buf) return new Blob([v.buf], { type: v.type || 'image/jpeg' });
+        return null;
+      });
+    },
     delImage: function (id) { return run('images', 'readwrite', function (s) { return s.delete(id); }); },
     allImageKeys: function () { return run('images', 'readonly', function (s) { return s.getAllKeys(); }); },
     takeInbox: function () {
@@ -90,6 +103,17 @@ Stash.idb = (function () {
     }
   };
 })();
+
+/* Lê um Blob como bytes (com reserva para navegadores antigos) */
+Stash.toBuffer = function (blob) {
+  if (blob && blob.arrayBuffer) return blob.arrayBuffer();
+  return new Promise(function (resolve, reject) {
+    var fr = new FileReader();
+    fr.onload = function () { resolve(fr.result); };
+    fr.onerror = function () { reject(fr.error || new Error('Não consegui ler a imagem')); };
+    fr.readAsArrayBuffer(blob);
+  });
+};
 
 /* ---------- Ícones Lucide como SVG inline (sem precisar de createIcons) ---------- */
 Stash.icon = function (name, size, cls) {
