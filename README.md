@@ -23,7 +23,8 @@ HTML + CSS + JS puro, sem build. Mesmo padrão visual do Waypoint (claro creme /
 4. **IA (opcional e grátis)**: entende o assunto do link e **lê imagens e prints**.
    - **Gemini** (principal): chave em https://aistudio.google.com/apikey. O Stash escolhe sozinho o melhor modelo Flash. No plano grátis, o Google pode usar o conteúdo enviado para melhorar os produtos dele.
    - **Groq** (reserva): chave em https://console.groq.com/keys. Usado quando o Gemini falha ou atinge o limite grátis (ou como principal, se for a única chave). O Stash escolhe sozinho um modelo de texto e outro que enxerga imagens; se não houver modelo de imagem, usa só o texto. A Groq diz que não usa seus dados para treinar modelos.
-   - Se os dois falharem, valem as regras locais. As chaves ficam só no navegador (não vão para o backup nem para a nuvem).
+   - Se os dois falharem, valem as regras locais. As chaves ficam só no navegador (não vão para o backup nem para a sincronização).
+   - **Chaves no Google Drive:** crie no seu Drive os arquivos `stash-gemini.txt` e `stash-groq.txt` (ou Google Docs com esses nomes), cada um com a chave dentro. Com o Drive conectado (*Configurações → Nuvem → Chaves de IA no Drive*, ligado por padrão), o Stash busca as chaves sozinho em cada aparelho e relê os arquivos a cada abertura. Usa a permissão de leitura do Drive. Mantenha esses arquivos só com você.
 
 ## Analisar com IA
 

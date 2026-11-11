@@ -704,7 +704,7 @@
       '<div class="btns"><button type="button" class="btn-primary btn-sm" id="sSaveAi">' + I('check', 14) + 'Salvar</button>' +
       '<button type="button" class="btn-ghost btn-sm" id="sTest">' + I('wand-sparkles', 14) + 'Testar Gemini</button>' +
       '<button type="button" class="btn-ghost btn-sm" id="sTestGroq">' + I('wand-sparkles', 14) + 'Testar Groq</button></div>' +
-      '<p class="note" id="sTestOut">As chaves ficam salvas só neste navegador (não vão para o backup nem para a nuvem). No plano grátis, o Google pode usar o conteúdo enviado ao Gemini (títulos, links e prints) para melhorar os produtos dele; a Groq diz que não usa seus dados para treinar modelos.</p>' +
+      '<p class="note" id="sTestOut">' + (s.keysFromDrive !== false ? 'As chaves podem vir sozinhas de arquivos no seu Drive (veja <b>Nuvem → Chaves de IA no Drive</b>). ' : '') + 'As chaves ficam salvas só neste navegador (não vão para o backup nem para a sincronização). No plano grátis, o Google pode usar o conteúdo enviado ao Gemini (títulos, links e prints) para melhorar os produtos dele; a Groq diz que não usa seus dados para treinar modelos.</p>' +
       '</section>' +
 
       '<section class="settings-sec" id="sCloud">' + cloudSettingsHtml() + '</section>' +
@@ -1017,15 +1017,37 @@
       return html + '<p class="note">A sincronização só funciona no Stash publicado: <a href="' + esc(S.PAGES_URL) + '" target="_blank" rel="noopener">' + esc(S.PAGES_URL.replace('https://', '')) + '</a>. Aberto direto pelo arquivo, o Google não permite o login.</p>';
     }
     html += '<label class="field"><span>ID do cliente OAuth</span><input class="input-field" id="sClient" autocomplete="off" value="' + esc(s.driveClientId || S.DRIVE_CLIENT_ID || '') + '" placeholder="…apps.googleusercontent.com"' + (conn ? ' disabled' : '') + '></label>';
+    var kOn = s.keysFromDrive !== false;
+    var ki = s.keysInfo;
+    var kStat = !kOn ? '' : !ki ? (S.cloud.canReadDrive() ? 'Ainda não buscadas.' : 'Precisa autorizar a leitura do Drive: toque em <b>Buscar chaves agora</b>.')
+      : 'Última busca: ' + new Date(ki.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) +
+        ' · Gemini: ' + (ki.gemini === 'ok' ? '✅ carregada' : 'arquivo não encontrado') + ' · Groq: ' + (ki.groq === 'ok' ? '✅ carregada' : 'arquivo não encontrado');
+    var keysHtml = '<div class="section-title" style="margin-top:.25rem">Chaves de IA no Drive</div>' +
+      '<label class="check"><input type="checkbox" id="sKeysDrive"' + (kOn ? ' checked' : '') + '><span>Buscar as chaves do Gemini e do Groq em arquivos do meu Google Drive, para não precisar colar em cada aparelho. Pede permissão de <b>leitura</b> do Drive.</span></label>' +
+      (kOn ? '<div class="field-row"><label class="field"><span>Arquivo da chave do Gemini</span><input class="input-field" id="sGemFile" value="' + esc(s.geminiKeyFile || 'stash-gemini.txt') + '"></label>' +
+        '<label class="field"><span>Arquivo da chave do Groq</span><input class="input-field" id="sGroqFile" value="' + esc(s.groqKeyFile || 'stash-groq.txt') + '"></label></div>' +
+        '<p class="note">Cada arquivo (.txt ou Google Docs) com a chave dentro, em qualquer pasta do seu Drive. Mantenha-os só com você (sem compartilhar). O Stash relê os arquivos a cada abertura: trocou a chave no Drive, todos os aparelhos pegam a nova.</p>' +
+        (conn ? '<p class="note" id="sKeysStatus">' + kStat + '</p><div class="btns"><button type="button" class="btn-ghost btn-sm" id="sKeysNow">' + I('key-round', 14) + 'Buscar chaves agora</button></div>' : '') : '');
     if (conn) {
       html += '<p class="note" id="sCloudStatus">' + esc(cloudText()) + '</p>' +
         '<div class="btns"><button type="button" class="btn-primary btn-sm" id="sSync">' + I('refresh-cw', 14) + 'Sincronizar agora</button>' +
-        '<button type="button" class="btn-ghost btn-sm" id="sDisconnect">' + I('cloud-off', 14) + 'Desconectar</button></div>';
+        '<button type="button" class="btn-ghost btn-sm" id="sDisconnect">' + I('cloud-off', 14) + 'Desconectar</button></div>' + keysHtml;
     } else {
-      html += '<div class="btns"><button type="button" class="btn-primary btn-sm" id="sConnect">' + I('cloud', 14) + 'Conectar Google Drive</button></div>' +
-        '<p class="note">Na primeira vez o Google avisa que o app "não foi verificado" (é um app pessoal): clique em <i>Continuar</i>. Em cada aparelho você conecta uma vez; de tempos em tempos o Google pede para entrar de novo (botão de nuvem no topo).</p>';
+      html += keysHtml + '<div class="btns"><button type="button" class="btn-primary btn-sm" id="sConnect">' + I('cloud', 14) + 'Conectar Google Drive</button></div>' +
+        '<p class="note">Na primeira vez o Google avisa que o app "não foi verificado" (é um app pessoal): clique em <i>Continuar</i> e marque as permissões. Em cada aparelho você conecta uma vez; de tempos em tempos o Google pede para entrar de novo (botão de nuvem no topo).</p>';
     }
     return html;
+  }
+  function keysMsg(r) {
+    if (!r) return '';
+    var found = [r.gemini === 'ok' ? 'Gemini' : '', r.groq === 'ok' ? 'Groq' : ''].filter(Boolean);
+    if (!found.length) return 'Não encontrei os arquivos das chaves no seu Drive (' + (state.settings.geminiKeyFile || 'stash-gemini.txt') + ', ' + (state.settings.groqKeyFile || 'stash-groq.txt') + ').';
+    return 'Chaves carregadas do Drive: ' + found.join(' e ') + (r.gemini !== 'ok' || r.groq !== 'ok' ? ' (o outro arquivo não foi encontrado)' : '');
+  }
+  function refreshAiFields(d) {
+    var s = state.settings;
+    if ($('#sKey', d)) $('#sKey', d).value = s.geminiKey || '';
+    if ($('#sGroqKey', d)) $('#sGroqKey', d).value = s.groqKey || '';
   }
   function bindCloudSettings(d) {
     var sec = $('#sCloud', d); if (!sec) return;
@@ -1043,10 +1065,23 @@
         state.settings.driveConnected = true; save();
         rerender();
         return S.cloud.sync();
-      }).then(function () { rerender(); toast(S.cloud.status() === 'ok' ? 'Google Drive conectado e sincronizado' : cloudText()); })
+      }).then(function () {
+        rerender(); refreshAiFields(d);
+        var ki = state.settings.keysInfo, got = ki ? [ki.gemini === 'ok' ? 'Gemini' : '', ki.groq === 'ok' ? 'Groq' : ''].filter(Boolean) : [];
+        toast(S.cloud.status() === 'ok' ? 'Google Drive conectado' + (got.length ? ' · chaves carregadas: ' + got.join(' e ') : '') : cloudText());
+      })
         .catch(function (e) { toast(e.message); });
     };
     if ($('#sSync', d)) $('#sSync', d).onclick = cloudClick;
+    if ($('#sKeysDrive', d)) $('#sKeysDrive', d).onchange = function () { state.settings.keysFromDrive = this.checked; save(); rerender(); };
+    if ($('#sGemFile', d)) $('#sGemFile', d).onchange = function () { state.settings.geminiKeyFile = this.value.trim() || 'stash-gemini.txt'; save(); };
+    if ($('#sGroqFile', d)) $('#sGroqFile', d).onchange = function () { state.settings.groqKeyFile = this.value.trim() || 'stash-groq.txt'; save(); };
+    if ($('#sKeysNow', d)) $('#sKeysNow', d).onclick = function () {
+      var go = S.cloud.canReadDrive() ? Promise.resolve() : S.cloud.signIn(false, true); // pede a leitura se ainda não tem
+      go.then(function () { return S.cloud.loadKeys(); })
+        .then(function (r) { rerender(); refreshAiFields(d); toast(keysMsg(r)); })
+        .catch(function (e) { toast('Não consegui buscar as chaves: ' + e.message); });
+    };
     if ($('#sDisconnect', d)) $('#sDisconnect', d).onclick = function () {
       if (!confirm('Desconectar o Google Drive neste aparelho? Seus itens continuam aqui e na nuvem.')) return;
       S.cloud.signOut(); state.settings.driveConnected = false; save(); rerender(); toast('Drive desconectado neste aparelho');
@@ -1128,6 +1163,11 @@
   bindPullToRefresh();
   S.cloud.init({
     toast: toast,
+    onKeys: function (r) {
+      renderHeader();
+      var d = $('#dlg'); if (d && d.open) refreshAiFields(d);
+      if (r.changed.length) toast('Chaves carregadas do Drive: ' + r.changed.join(' e '));
+    },
     state: function () { return state; },
     saveLocal: saveLocal,
     onStatus: renderCloud,

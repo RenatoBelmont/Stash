@@ -52,7 +52,8 @@ Stash.cloud = (function () {
     return standalone && ios;
   }
   function redirectUri() { return location.origin + location.pathname.replace(/index\.html$/, ''); }
-  function scopesFor(wantRead) { return SCOPE + (wantRead || canReadDrive() ? ' ' + READ : ''); }
+  function keysWanted() { return app && app.state().settings.keysFromDrive !== false; }
+  function scopesFor(wantRead) { return SCOPE + (wantRead || canReadDrive() || keysWanted() ? ' ' + READ : ''); }
   function signInRedirect(connecting, wantRead, pendingAnalyze) {
     var st = Math.random().toString(36).slice(2) + Date.now().toString(36);
     try {
@@ -122,6 +123,49 @@ Stash.cloud = (function () {
     else if (/^text\/|json|xml|csv/.test(f.mimeType || '')) text = await (await api(API + 'files/' + encodeURIComponent(id) + '?alt=media&supportsAllDrives=true')).text();
     else text = 'Arquivo do Google Drive do tipo ' + f.mimeType + (f.description ? '. Descrição: ' + f.description : '');
     return { title: f.name || '', text: text };
+  }
+
+  /* ---------- chaves de IA guardadas em arquivos .txt no seu Drive ---------- */
+  var keysTried = false;
+  async function readKeyFile(name, re) {
+    name = String(name || '').trim();
+    if (!name) return null;
+    var names = [name, name.replace(/\.txt$/i, '')].filter(function (n, i, a) { return n && a.indexOf(n) === i; });
+    var q = '(' + names.map(function (n) { return "name='" + n.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; }).join(' or ') + ') and trashed=false';
+    var r = await api(API + 'files?spaces=drive&q=' + encodeURIComponent(q) + '&fields=files(id,name,mimeType,modifiedTime)&orderBy=modifiedTime%20desc&pageSize=5');
+    var f = ((await r.json()).files || [])[0];
+    if (!f) return { missing: true };
+    var text = f.mimeType === 'application/vnd.google-apps.document'
+      ? await (await api(API + 'files/' + f.id + '/export?mimeType=text%2Fplain')).text()
+      : await (await api(API + 'files/' + f.id + '?alt=media')).text();
+    var m = text.match(re);
+    var key = m ? m[0] : (text.trim().split(/\s+/)[0] || '');
+    return key ? { key: key, file: f.name } : { missing: true };
+  }
+  // Lê stash-gemini.txt e stash-groq.txt (nomes configuráveis) e guarda as chaves neste aparelho
+  async function loadKeys() {
+    keysTried = true;
+    var s = app.state().settings;
+    if (!canReadDrive()) { var e = new Error('Falta a permissão de leitura do Drive'); e.needRead = true; throw e; }
+    var res = { gemini: 'missing', groq: 'missing', changed: [] };
+    var g = await readKeyFile(s.geminiKeyFile || 'stash-gemini.txt', /AIza[\w-]{30,}/);
+    if (g && g.key) {
+      res.gemini = 'ok';
+      if (g.key !== s.geminiKey) { s.geminiKey = g.key; s.geminiModel = ''; s.geminiModels = []; res.changed.push('Gemini'); }
+    }
+    var q = await readKeyFile(s.groqKeyFile || 'stash-groq.txt', /gsk_[\w]{20,}/);
+    if (q && q.key) {
+      res.groq = 'ok';
+      if (q.key !== s.groqKey) { s.groqKey = q.key; s.groqModel = ''; s.groqVisionModel = ''; s.groqModels = []; res.changed.push('Groq'); }
+    }
+    s.keysInfo = { at: Date.now(), gemini: res.gemini, groq: res.groq };
+    app.saveLocal();
+    if (app.onKeys) app.onKeys(res);
+    return res;
+  }
+  function maybeLoadKeys() {
+    if (keysTried || !keysWanted() || !canReadDrive()) return Promise.resolve();
+    return loadKeys().catch(function (e) { console.warn('[Stash] chaves no Drive:', e); });
   }
 
   function signOut() {
@@ -240,6 +284,7 @@ Stash.cloud = (function () {
     running = (async function () {
       setStatus('syncing');
       var step = 'buscar os dados da nuvem';
+      await maybeLoadKeys();
       try {
         var f = await findFile('stash.json');
         var remote = null;
@@ -333,13 +378,13 @@ Stash.cloud = (function () {
       lastAuto = Date.now();
       if (hasToken()) sync(); else setStatus('login');
     });
-    if (!enabled() || !available()) { status = 'off'; return; }
+    if (!enabled() || !available()) { status = 'off'; maybeLoadKeys(); return; }
     if (!isIosApp()) loadGis().catch(function () {});
     if (hasToken()) sync(); else setStatus('login');
   }
 
   return {
-    init: init, sync: sync, isIosApp: isIosApp, canReadDrive: canReadDrive, readGoogleFile: readGoogleFile,
+    init: init, sync: sync, isIosApp: isIosApp, loadKeys: loadKeys, maybeLoadKeys: maybeLoadKeys, canReadDrive: canReadDrive, readGoogleFile: readGoogleFile,
     hasClient: function () { return !!clientId() && available(); }, schedule: schedule, signIn: signIn, signOut: signOut, loadGis: loadGis,
     fetchImage: fetchImage, deleteImage: deleteImage, merge: merge,
     enabled: enabled, available: available, hasToken: hasToken,
